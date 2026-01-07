@@ -6,13 +6,16 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use autopilot_client::AutopilotError;
+use durable::WorkerOptions;
 use evaluations::stats::EvaluationStats;
+use evaluations::topk::{TopKTask, TopKTaskParams, TopKTaskState};
 use evaluations::types::{EvaluationCoreArgs, EvaluationVariant};
 use evaluations::{
-    ClientInferenceExecutor, EvaluationUpdate, OutputFormat, run_evaluation_core_streaming,
+    ClientInferenceExecutor, Clients, EvaluationUpdate, OutputFormat, run_evaluation_core_streaming,
 };
 use tensorzero::{
     Client, ClientExt, ClientInferenceParams, ClientMode, CreateDatapointRequest,
@@ -40,7 +43,8 @@ use uuid::Uuid;
 use super::{
     CreateEventGatewayRequest, CreateEventResponse, EvaluatorStatsResponse, ListEventsParams,
     ListEventsResponse, ListSessionsParams, ListSessionsResponse, RunEvaluationParams,
-    RunEvaluationResponse, TensorZeroClient, TensorZeroClientError,
+    RunEvaluationResponse, RunTopKEvaluationParams, RunTopKEvaluationResponse, TensorZeroClient,
+    TensorZeroClientError,
 };
 
 /// Implementation of `TensorZeroClient` for the TensorZero SDK `Client`.
@@ -706,4 +710,197 @@ impl TensorZeroClient for Client {
             }
         }
     }
+
+    async fn run_topk_evaluation(
+        &self,
+        params: RunTopKEvaluationParams,
+    ) -> Result<RunTopKEvaluationResponse, TensorZeroClientError> {
+        match self.mode() {
+            ClientMode::HTTPGateway(_) => Err(TensorZeroClientError::NotSupported(
+                "run_topk_evaluation is only supported in embedded gateway mode".to_string(),
+            )),
+            ClientMode::EmbeddedGateway {
+                gateway,
+                timeout: _,
+            } => {
+                let app_state = &gateway.handle.app_state;
+
+                // Look up the evaluation config
+                let evaluation_config = app_state
+                    .config
+                    .evaluations
+                    .get(&params.evaluation_name)
+                    .ok_or_else(|| {
+                        TensorZeroClientError::Evaluation(format!(
+                            "Evaluation '{}' not found in config",
+                            params.evaluation_name
+                        ))
+                    })?
+                    .clone();
+
+                // Build function configs table
+                let function_configs: HashMap<String, EvaluationFunctionConfig> = app_state
+                    .config
+                    .functions
+                    .iter()
+                    .map(|(name, func)| {
+                        (name.clone(), EvaluationFunctionConfig::from(func.as_ref()))
+                    })
+                    .collect();
+
+                // Build TopKTaskParams from RunTopKEvaluationParams
+                let task_params = TopKTaskParams {
+                    evaluation_name: params.evaluation_name,
+                    dataset_name: params.dataset_name,
+                    variant_names: params.variant_names,
+                    k_min: params.k_min,
+                    k_max: params.k_max,
+                    epsilon: params.epsilon,
+                    max_datapoints: params.max_datapoints,
+                    batch_size: params.batch_size,
+                    variant_failure_threshold: params.variant_failure_threshold,
+                    evaluator_failure_threshold: params.evaluator_failure_threshold,
+                    concurrency: params.concurrency,
+                    inference_cache: params.inference_cache,
+                    evaluation_config: (*evaluation_config).clone(),
+                    function_configs,
+                    scoring_function: params.scoring_function,
+                };
+
+                // Create task state with clients
+                let inference_executor = Arc::new(ClientInferenceExecutor::new(self.clone()));
+                let clients = Arc::new(Clients {
+                    inference_executor,
+                    clickhouse_client: app_state.clickhouse_connection_info.clone(),
+                });
+                let task_state = TopKTaskState { clients };
+
+                // Get postgres pool from gateway
+                let pg_pool = app_state
+                    .postgres_connection_info
+                    .get_pool()
+                    .ok_or_else(|| {
+                        TensorZeroClientError::Evaluation(
+                            "PostgreSQL connection required for top-k evaluation".to_string(),
+                        )
+                    })?;
+
+                // Create durable client with unique queue name
+                let queue_name = format!("topk_eval_{}", Uuid::now_v7());
+                let durable_client = evaluations::topk::create_client(
+                    pg_pool.clone(),
+                    task_state.clone(),
+                    Some(&queue_name),
+                )
+                .await
+                .map_err(|e| {
+                    TensorZeroClientError::Evaluation(format!(
+                        "Failed to create durable client: {e}"
+                    ))
+                })?;
+
+                // Spawn the task
+                let spawn_result = durable_client
+                    .spawn::<TopKTask>(task_params)
+                    .await
+                    .map_err(|e| {
+                        TensorZeroClientError::Evaluation(format!("Failed to spawn task: {e}"))
+                    })?;
+
+                // Start a worker to process the task
+                let worker = durable_client
+                    .start_worker(WorkerOptions {
+                        poll_interval: Duration::from_millis(100),
+                        claim_timeout: Duration::from_secs(300),
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(|e| {
+                        TensorZeroClientError::Evaluation(format!("Failed to start worker: {e}"))
+                    })?;
+
+                // Poll for completion
+                let output = poll_topk_task(pg_pool, &queue_name, spawn_result.task_id).await;
+
+                // Shutdown worker
+                worker.shutdown().await;
+
+                // Return result or error
+                let output = output?;
+                Ok(RunTopKEvaluationResponse { output })
+            }
+        }
+    }
+}
+
+/// Poll for top-k task completion.
+async fn poll_topk_task(
+    pool: &sqlx::PgPool,
+    queue_name: &str,
+    task_id: Uuid,
+) -> Result<evaluations::topk::TopKTaskOutput, TensorZeroClientError> {
+    use sqlx::{AssertSqlSafe, query_as};
+
+    let timeout = Duration::from_secs(3600); // 1 hour timeout
+    let start = std::time::Instant::now();
+
+    loop {
+        if start.elapsed() > timeout {
+            return Err(TensorZeroClientError::Evaluation(
+                "Top-k evaluation timed out".to_string(),
+            ));
+        }
+
+        // Check task state
+        let query = format!("SELECT state FROM durable.t_{queue_name} WHERE task_id = $1");
+        let state: Option<(String,)> = query_as(AssertSqlSafe(query))
+            .bind(task_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                TensorZeroClientError::Evaluation(format!("Failed to query task state: {e}"))
+            })?;
+
+        if let Some((state,)) = state {
+            if state == "completed" {
+                break;
+            } else if state == "failed" {
+                // Get error message
+                let query =
+                    format!("SELECT failed_error FROM durable.t_{queue_name} WHERE task_id = $1");
+                let error: Option<(Option<String>,)> = query_as(AssertSqlSafe(query))
+                    .bind(task_id)
+                    .fetch_optional(pool)
+                    .await
+                    .ok()
+                    .flatten();
+                let error_msg = error
+                    .and_then(|(e,)| e)
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                return Err(TensorZeroClientError::Evaluation(format!(
+                    "Top-k task failed: {error_msg}"
+                )));
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // Get the task result
+    let query = format!("SELECT completed_payload FROM durable.t_{queue_name} WHERE task_id = $1");
+    let result: Option<(Option<serde_json::Value>,)> = query_as(AssertSqlSafe(query))
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            TensorZeroClientError::Evaluation(format!("Failed to query task result: {e}"))
+        })?;
+
+    let output = result
+        .and_then(|(payload,)| payload)
+        .ok_or_else(|| TensorZeroClientError::Evaluation("No task output found".to_string()))?;
+
+    serde_json::from_value(output).map_err(|e| {
+        TensorZeroClientError::Evaluation(format!("Failed to deserialize output: {e}"))
+    })
 }
