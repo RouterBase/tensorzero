@@ -783,7 +783,8 @@ impl TensorZeroClient for Client {
                     })?;
 
                 // Create durable client with unique queue name
-                let queue_name = format!("topk_eval_{}", Uuid::now_v7());
+                // Use .simple() to avoid hyphens in the UUID, since Postgres identifiers can't contain hyphens
+                let queue_name = format!("topk_eval_{}", Uuid::now_v7().simple());
                 let durable_client = evaluations::topk::create_client(
                     pg_pool.clone(),
                     task_state.clone(),
@@ -817,7 +818,8 @@ impl TensorZeroClient for Client {
                     })?;
 
                 // Poll for completion
-                let output = poll_topk_task(pg_pool, &queue_name, spawn_result.task_id).await;
+                let output =
+                    super::poll_topk_task(pg_pool, &queue_name, spawn_result.task_id).await;
 
                 // Shutdown worker
                 worker.shutdown().await;
@@ -828,76 +830,4 @@ impl TensorZeroClient for Client {
             }
         }
     }
-}
-
-/// Poll for top-k task completion.
-async fn poll_topk_task(
-    pool: &sqlx::PgPool,
-    queue_name: &str,
-    task_id: Uuid,
-) -> Result<evaluations::topk::TopKTaskOutput, TensorZeroClientError> {
-    use sqlx::{AssertSqlSafe, query_as};
-
-    let timeout = Duration::from_secs(3600); // 1 hour timeout
-    let start = std::time::Instant::now();
-
-    loop {
-        if start.elapsed() > timeout {
-            return Err(TensorZeroClientError::Evaluation(
-                "Top-k evaluation timed out".to_string(),
-            ));
-        }
-
-        // Check task state
-        let query = format!("SELECT state FROM durable.t_{queue_name} WHERE task_id = $1");
-        let state: Option<(String,)> = query_as(AssertSqlSafe(query))
-            .bind(task_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| {
-                TensorZeroClientError::Evaluation(format!("Failed to query task state: {e}"))
-            })?;
-
-        if let Some((state,)) = state {
-            if state == "completed" {
-                break;
-            } else if state == "failed" {
-                // Get error message
-                let query =
-                    format!("SELECT failed_error FROM durable.t_{queue_name} WHERE task_id = $1");
-                let error: Option<(Option<String>,)> = query_as(AssertSqlSafe(query))
-                    .bind(task_id)
-                    .fetch_optional(pool)
-                    .await
-                    .ok()
-                    .flatten();
-                let error_msg = error
-                    .and_then(|(e,)| e)
-                    .unwrap_or_else(|| "Unknown error".to_string());
-                return Err(TensorZeroClientError::Evaluation(format!(
-                    "Top-k task failed: {error_msg}"
-                )));
-            }
-        }
-
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-
-    // Get the task result
-    let query = format!("SELECT completed_payload FROM durable.t_{queue_name} WHERE task_id = $1");
-    let result: Option<(Option<serde_json::Value>,)> = query_as(AssertSqlSafe(query))
-        .bind(task_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            TensorZeroClientError::Evaluation(format!("Failed to query task result: {e}"))
-        })?;
-
-    let output = result
-        .and_then(|(payload,)| payload)
-        .ok_or_else(|| TensorZeroClientError::Evaluation("No task output found".to_string()))?;
-
-    serde_json::from_value(output).map_err(|e| {
-        TensorZeroClientError::Evaluation(format!("Failed to deserialize output: {e}"))
-    })
 }
