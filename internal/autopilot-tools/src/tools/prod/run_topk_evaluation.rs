@@ -10,6 +10,7 @@ use durable_tools::{
 use schemars::{JsonSchema, Schema};
 use serde::{Deserialize, Serialize};
 
+use crate::error::AutopilotToolError;
 use autopilot_client::AutopilotSideInfo;
 
 /// Parameters for the run_topk_evaluation tool (visible to LLM).
@@ -164,8 +165,12 @@ impl ToolMetadata for RunTopKEvaluationTool {
             "required": ["evaluation_name", "dataset_name", "variant_names", "k_min", "k_max"]
         });
 
-        serde_json::from_value(schema)
-            .map_err(|e| NonControlToolError::SchemaGeneration(e.into()).into())
+        serde_json::from_value(schema).map_err(|e| {
+            NonControlToolError::SchemaGeneration {
+                message: e.to_string(),
+            }
+            .into()
+        })
     }
 }
 
@@ -196,6 +201,6 @@ impl SimpleTool for RunTopKEvaluationTool {
         ctx.client()
             .run_topk_evaluation(params)
             .await
-            .map_err(|e| NonControlToolError::ExecutionFailed(e.into()).into())
+            .map_err(|e| AutopilotToolError::client_error("run_topk_evaluation", e).into())
     }
 }
