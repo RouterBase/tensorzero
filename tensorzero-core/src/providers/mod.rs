@@ -16,6 +16,7 @@ pub mod groq;
 pub mod helpers;
 pub mod helpers_thinking_block;
 pub mod hyperbolic;
+pub mod kie;
 pub mod mistral;
 pub mod openai;
 pub mod openrouter;

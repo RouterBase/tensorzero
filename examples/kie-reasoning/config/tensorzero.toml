@@ -1,0 +1,70 @@
+# TensorZero Configuration for KIE (Knowledge-Intensive Engine) Reasoning
+
+[functions.solve_problem]
+type = "chat"
+description = "Solve a complex problem using KIE reasoning"
+
+# KIE with reasoning enabled
+[functions.solve_problem.variants.kie_reasoning]
+type = "chat_completion"
+model = "kie::kie-chat"
+max_tokens = 16000
+reasoning_effort = "medium"
+include_thoughts = true
+
+# KIE with extended reasoning
+[functions.solve_problem.variants.kie_extended]
+type = "chat_completion"
+model = "kie::kie-chat"
+max_tokens = 32000
+reasoning_effort = "high"
+include_thoughts = true
+
+# KIE without reasoning (faster inference)
+[functions.solve_problem.variants.kie_fast]
+type = "chat_completion"
+model = "kie::kie-chat"
+max_tokens = 4000
+temperature = 0.7
+
+# Comparison: OpenAI for baseline
+[functions.solve_problem.variants.gpt_4_turbo]
+type = "chat_completion"
+model = "openai::gpt-4-turbo"
+max_tokens = 16000
+temperature = 0.7
+
+[functions.math_reasoning]
+type = "chat"
+description = "Solve math problems with step-by-step reasoning"
+
+# KIE for math reasoning with maximum reasoning effort
+[functions.math_reasoning.variants.kie_math]
+type = "chat_completion"
+model = "kie::kie-chat"
+max_tokens = 8000
+reasoning_effort = "high"
+include_thoughts = true
+system_instructions = "config/math_system_prompt.txt"
+
+[functions.code_analysis]
+type = "chat"
+description = "Analyze code and provide detailed explanations"
+
+# KIE for code analysis
+[functions.code_analysis.variants.kie_code]
+type = "chat_completion"
+model = "kie::kie-chat"
+max_tokens = 12000
+reasoning_effort = "medium"
+include_thoughts = true
+system_instructions = "config/code_system_prompt.txt"
+
+# Streaming variant for real-time feedback
+[functions.code_analysis.variants.kie_code_streaming]
+type = "chat_completion"
+model = "kie::kie-chat"
+max_tokens = 12000
+reasoning_effort = "low"
+system_instructions = "config/code_system_prompt.txt"
+stream = true

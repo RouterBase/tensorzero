@@ -1,0 +1,28 @@
+{
+  "name": "kie-reasoning-example",
+  "version": "1.0.0",
+  "description": "TensorZero KIE Reasoning Example",
+  "main": "example.ts",
+  "scripts": {
+    "start": "ts-node example.ts",
+    "build": "tsc",
+    "run": "node dist/example.js"
+  },
+  "dependencies": {
+    "tensorzero": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "tensorzero",
+    "kie",
+    "reasoning",
+    "llm",
+    "gateway"
+  ],
+  "author": "",
+  "license": "Apache-2.0"
+}
