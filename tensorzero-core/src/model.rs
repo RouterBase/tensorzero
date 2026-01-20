@@ -2570,6 +2570,7 @@ pub const SHORTHAND_MODEL_PREFIXES: &[&str] = &[
     "gcp_vertex_anthropic::",
     "hyperbolic::",
     "groq::",
+    "kie::",
     "mistral::",
     "openai::",
     "openrouter::",
@@ -2635,6 +2636,12 @@ impl ShorthandModelConfig for ModelConfig {
             "hyperbolic" => ProviderConfig::Hyperbolic(HyperbolicProvider::new(
                 model_name,
                 HyperbolicKind
+                    .get_defaulted_credential(None, default_credentials)
+                    .await?,
+            )),
+            "kie" => ProviderConfig::KIE(KIEProvider::new(
+                model_name,
+                KIEKind
                     .get_defaulted_credential(None, default_credentials)
                     .await?,
             )),
