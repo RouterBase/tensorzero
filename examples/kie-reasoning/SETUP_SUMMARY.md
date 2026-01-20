@@ -1,32 +1,34 @@
-## ✅ KIE 示例创建完成
+# KIE Reasoning Example - Setup Summary
 
-已在 `examples/kie-reasoning` 目录下创建了完整的 KIE 提供程序示例。
+## ✅ KIE Example Setup Complete
 
-### 📁 创建的文件结构
+A complete KIE (Knowledge-Intensive Engine) provider example has been created in the `examples/kie-reasoning` directory.
+
+### 📁 Directory Structure
 
 ```
 examples/kie-reasoning/
-├── README.md                      # 详细文档（英文）
-├── QUICKSTART.md                  # 快速开始指南（中文）
-├── example.py                     # Python 示例代码
-├── example.ts                     # TypeScript/Node.js 示例代码
-├── package.json                   # Node.js 依赖配置
-├── requirements.txt               # Python 依赖配置
-├── tsconfig.json                  # TypeScript 编译配置
+├── README.md                      # Comprehensive documentation (English)
+├── QUICKSTART.md                  # Quick start guide (English)
+├── example.py                     # Python example code
+├── example.ts                     # TypeScript/Node.js example code
+├── package.json                   # Node.js dependencies
+├── requirements.txt               # Python dependencies
+├── tsconfig.json                  # TypeScript configuration
 └── config/
-    ├── tensorzero.toml           # KIE 配置文件
-    ├── math_system_prompt.txt    # 数学推理系统提示
-    └── code_system_prompt.txt    # 代码分析系统提示
+    ├── tensorzero.toml           # KIE configuration
+    ├── math_system_prompt.txt    # Math reasoning system prompt
+    └── code_system_prompt.txt    # Code analysis system prompt
 ```
 
-### 🎯 包含的示例
+### 🎯 Included Examples
 
-1. **问题求解** - 演示流式响应和中等推理努力
-2. **数学推理** - 使用高推理努力证明数学定理
-3. **代码分析** - 实时反馈的代码分析
-4. **模型对比** - 与 GPT-4 Turbo 的对比
+1. **Problem Solving** - Demonstrates streaming responses with medium reasoning effort
+2. **Math Reasoning** - Uses high reasoning effort to prove mathematical theorems
+3. **Code Analysis** - Real-time streaming feedback for code review
+4. **Model Comparison** - Compare KIE with GPT-4 Turbo on same prompts
 
-### 🚀 快速开始
+### 🚀 Quick Start
 
 **Python:**
 ```bash
@@ -42,35 +44,43 @@ npm install
 npm start
 ```
 
-### 📋 配置特性
+### 📋 Configuration Features
 
-- ✅ 多个 KIE 变体（不同推理努力级别）
-- ✅ 流式和非流式推理
-- ✅ 思维块/推理内容支持
-- ✅ 工具调用基础设施
-- ✅ 自定义系统提示
-- ✅ 与其他模型的对比
+- ✅ Multiple KIE variants (different reasoning effort levels)
+- ✅ Streaming and non-streaming inference
+- ✅ Thought blocks/reasoning content support
+- ✅ Tool calling infrastructure
+- ✅ Custom system prompts
+- ✅ Model comparison setup
 
-### 🔑 关键配置参数
+### 🔑 Key Configuration Parameters
 
 ```toml
-model = "kie::kie-chat"           # KIE 模型标识符
-max_tokens = 16000                # 最大令牌数
-reasoning_effort = "medium"       # "low", "medium", "high"
-include_thoughts = true           # 包含推理步骤
-stream = true                     # 启用流式响应
+model = "kie::kie-chat"           # KIE model identifier
+max_tokens = 16000                # Maximum token limit
+reasoning_effort = "medium"       # "low", "medium", or "high"
+include_thoughts = true           # Include reasoning steps
+stream = true                     # Enable streaming responses
 ```
 
-### 📖 文档
+### 📖 Documentation
 
-- **README.md** - 完整的英文文档，包括所有功能和参数说明
-- **QUICKSTART.md** - 中文快速开始指南，包括故障排除
-- 示例代码中包含详细注释
+- **README.md** - Complete English documentation with all features and parameters
+- **QUICKSTART.md** - Quick start guide with troubleshooting
+- Detailed code comments in Python and TypeScript examples
 
-### 参考 DeepSeek 的最佳实践
+### 🎯 Supported Use Cases
 
-这个示例跟随 TensorZero 的 DeepSeek 提供程序的模式：
-- 使用相同的配置结构
-- 演示流式和非流式推理
-- 展示如何集成多个变体
-- 包含系统提示示例
+1. **Academic Research** - Use `reasoning_effort = "high"` for deep analysis
+2. **Real-time Chat** - Use `reasoning_effort = "low"` with streaming
+3. **Code Review** - Medium reasoning with custom system prompts
+4. **A/B Testing** - Compare different reasoning effort levels
+
+### ✅ Following DeepSeek Best Practices
+
+This example follows TensorZero's DeepSeek provider pattern:
+- Uses consistent configuration structure
+- Demonstrates both streaming and non-streaming inference
+- Shows how to integrate multiple variants
+- Includes system prompt templates
+- Provides comprehensive documentation and examples
