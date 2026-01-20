@@ -10,7 +10,6 @@ type = "chat_completion"
 model = "kie::kie-chat"
 max_tokens = 16000
 reasoning_effort = "medium"
-include_thoughts = true
 
 # KIE with extended reasoning
 [functions.solve_problem.variants.kie_extended]
@@ -18,7 +17,6 @@ type = "chat_completion"
 model = "kie::kie-chat"
 max_tokens = 32000
 reasoning_effort = "high"
-include_thoughts = true
 
 # KIE without reasoning (faster inference)
 [functions.solve_problem.variants.kie_fast]
@@ -44,8 +42,7 @@ type = "chat_completion"
 model = "kie::kie-chat"
 max_tokens = 8000
 reasoning_effort = "high"
-include_thoughts = true
-system_instructions = "config/math_system_prompt.txt"
+system_template = "math_system_prompt.txt"
 
 [functions.code_analysis]
 type = "chat"
@@ -57,14 +54,12 @@ type = "chat_completion"
 model = "kie::kie-chat"
 max_tokens = 12000
 reasoning_effort = "medium"
-include_thoughts = true
-system_instructions = "config/code_system_prompt.txt"
+system_template = "code_system_prompt.txt"
 
-# Streaming variant for real-time feedback
+# Streaming variant for real-time feedback (streaming is controlled via API request)
 [functions.code_analysis.variants.kie_code_streaming]
 type = "chat_completion"
 model = "kie::kie-chat"
 max_tokens = 12000
 reasoning_effort = "low"
-system_instructions = "config/code_system_prompt.txt"
-stream = true
+system_template = "code_system_prompt.txt"
