@@ -23,6 +23,8 @@ pub struct ProviderTypesConfig {
     #[serde(default)]
     pub hyperbolic: HyperbolicProviderTypeConfig,
     #[serde(default)]
+    pub kie: KIEProviderTypeConfig,
+    #[serde(default)]
     pub mistral: MistralProviderTypeConfig,
     #[serde(default)]
     pub openai: OpenAIProviderTypeConfig,
@@ -276,6 +278,29 @@ impl Default for HyperbolicDefaults {
         Self {
             api_key_location: CredentialLocationWithFallback::Single(CredentialLocation::Env(
                 "HYPERBOLIC_API_KEY".to_string(),
+            )),
+        }
+    }
+}
+
+// KIE
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct KIEProviderTypeConfig {
+    #[serde(default)]
+    pub defaults: KIEDefaults,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct KIEDefaults {
+    pub api_key_location: CredentialLocationWithFallback,
+}
+
+impl Default for KIEDefaults {
+    fn default() -> Self {
+        Self {
+            api_key_location: CredentialLocationWithFallback::Single(CredentialLocation::Env(
+                "KIE_API_KEY".to_string(),
             )),
         }
     }
