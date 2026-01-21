@@ -1,28 +1,46 @@
 # TensorZero Configuration for KIE (Knowledge-Intensive Engine) Reasoning
 
+# Object storage configuration - disabled since we'll use external URLs
+[object_storage]
+type = "disabled"
+
 [functions.solve_problem]
 type = "chat"
 description = "Solve a complex problem using KIE reasoning"
 
-# KIE with reasoning enabled
+# KIE Gemini 3 Pro with reasoning enabled
 [functions.solve_problem.variants.kie_reasoning]
 type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-pro"
 max_tokens = 16000
-reasoning_effort = "medium"
+reasoning_effort = "high"
 
-# KIE with extended reasoning
+# KIE Gemini 3 Pro with extended reasoning
 [functions.solve_problem.variants.kie_extended]
 type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-pro"
 max_tokens = 32000
 reasoning_effort = "high"
 
-# KIE without reasoning (faster inference)
-[functions.solve_problem.variants.kie_fast]
+# KIE Gemini 3 Flash (faster inference)
+[functions.solve_problem.variants.kie_flash]
 type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-flash"
 max_tokens = 4000
+temperature = 0.7
+
+# KIE Gemini 2.5 Pro with reasoning
+[functions.solve_problem.variants.kie_gemini_2_5_pro]
+type = "chat_completion"
+model = "kie::gemini-2.5-pro"
+max_tokens = 16000
+reasoning_effort = "high"
+
+# KIE Gemini 2.5 Flash (fastest variant)
+[functions.solve_problem.variants.kie_gemini_2_5_flash]
+type = "chat_completion"
+model = "kie::gemini-2.5-flash"
+max_tokens = 8000
 temperature = 0.7
 
 # Comparison: OpenAI for baseline
@@ -36,10 +54,18 @@ temperature = 0.7
 type = "chat"
 description = "Solve math problems with step-by-step reasoning"
 
-# KIE for math reasoning with maximum reasoning effort
+# KIE Gemini 3 Pro for math reasoning with maximum reasoning effort
 [functions.math_reasoning.variants.kie_math]
 type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-pro"
+max_tokens = 8000
+reasoning_effort = "high"
+system_template = "math_system_prompt.txt"
+
+# KIE Gemini 2.5 Pro alternative
+[functions.math_reasoning.variants.kie_math_2_5]
+type = "chat_completion"
+model = "kie::gemini-2.5-pro"
 max_tokens = 8000
 reasoning_effort = "high"
 system_template = "math_system_prompt.txt"
@@ -48,18 +74,107 @@ system_template = "math_system_prompt.txt"
 type = "chat"
 description = "Analyze code and provide detailed explanations"
 
-# KIE for code analysis
+# KIE Gemini 3 Pro for code analysis
 [functions.code_analysis.variants.kie_code]
 type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-pro"
 max_tokens = 12000
-reasoning_effort = "medium"
+reasoning_effort = "high"
+system_template = "code_system_prompt.txt"
+
+# KIE Gemini 3 Flash for faster code analysis
+[functions.code_analysis.variants.kie_code_flash]
+type = "chat_completion"
+model = "kie::gemini-3-flash"
+max_tokens = 12000
+reasoning_effort = "low"
 system_template = "code_system_prompt.txt"
 
 # Streaming variant for real-time feedback (streaming is controlled via API request)
 [functions.code_analysis.variants.kie_code_streaming]
 type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-pro"
 max_tokens = 12000
 reasoning_effort = "low"
 system_template = "code_system_prompt.txt"
+# ========================================================================
+# Media Processing Functions
+# ========================================================================
+
+[functions.image_analysis]
+type = "chat"
+description = "Analyze images and provide detailed descriptions"
+
+# KIE Gemini 3 Pro for image analysis
+[functions.image_analysis.variants.kie_vision]
+type = "chat_completion"
+model = "kie::gemini-3-pro"
+reasoning_effort = "high"
+
+# KIE Gemini 3 Flash for faster image analysis
+[functions.image_analysis.variants.kie_vision_fast]
+type = "chat_completion"
+model = "kie::gemini-3-flash"
+max_tokens = 2000
+reasoning_effort = "low"
+
+[functions.video_analysis]
+type = "chat"
+description = "Analyze videos and extract key information"
+
+# KIE Gemini 3 Pro for video analysis
+[functions.video_analysis.variants.kie_video]
+type = "chat_completion"
+model = "kie::gemini-3-pro"
+max_tokens = 6000
+reasoning_effort = "high"
+
+# KIE Gemini 2.5 Pro alternative for video
+[functions.video_analysis.variants.kie_video_2_5]
+type = "chat_completion"
+model = "kie::gemini-2.5-pro"
+max_tokens = 6000
+reasoning_effort = "high"
+
+[functions.document_analysis]
+type = "chat"
+description = "Analyze PDF documents and extract insights"
+
+# KIE Gemini 3 Pro for document analysis
+[functions.document_analysis.variants.kie_document]
+type = "chat_completion"
+model = "kie::gemini-3-pro"
+max_tokens = 8000
+reasoning_effort = "high"
+
+# KIE Gemini 3 Flash for faster document analysis
+[functions.document_analysis.variants.kie_document_fast]
+type = "chat_completion"
+model = "kie::gemini-3-flash"
+max_tokens = 4000
+reasoning_effort = "low"
+
+[functions.multimodal_reasoning]
+type = "chat"
+description = "Perform reasoning across multiple media types (images, videos, documents)"
+
+# KIE Gemini 3 Pro for advanced multimodal reasoning
+[functions.multimodal_reasoning.variants.kie_multimodal]
+type = "chat_completion"
+model = "kie::gemini-3-pro"
+max_tokens = 10000
+reasoning_effort = "high"
+
+# KIE Gemini 2.5 Pro for multimodal processing
+[functions.multimodal_reasoning.variants.kie_multimodal_2_5]
+type = "chat_completion"
+model = "kie::gemini-2.5-pro"
+max_tokens = 10000
+reasoning_effort = "high"
+
+# KIE Gemini 3 Flash for faster multimodal analysis
+[functions.multimodal_reasoning.variants.kie_multimodal_fast]
+type = "chat_completion"
+model = "kie::gemini-3-flash"
+max_tokens = 6000
+reasoning_effort = "low"

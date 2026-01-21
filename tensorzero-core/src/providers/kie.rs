@@ -41,10 +41,7 @@ use crate::providers::openai::{
 use uuid::Uuid;
 
 lazy_static! {
-    static ref KIE_DEFAULT_BASE_URL: Url = {
-        #[expect(clippy::expect_used)]
-        Url::parse("https://api.kie.ai/v1").expect("Failed to parse KIE_DEFAULT_BASE_URL")
-    };
+    static ref KIE_API_BASE: &'static str = "https://api.kie.ai";
 }
 
 const PROVIDER_NAME: &str = "KIE";
@@ -160,11 +157,13 @@ impl InferenceProvider for KIEProvider {
                     })
                 })?;
 
-        let request_url = KIE_DEFAULT_BASE_URL.join("chat/completions").map_err(|e| {
-            Error::new(ErrorDetails::InvalidBaseUrl {
-                message: format!("Failed to construct KIE chat URL: {e}"),
-            })
-        })?;
+        let request_url = format!("{}/{}/v1/chat/completions", *KIE_API_BASE, self.model_name)
+            .parse::<Url>()
+            .map_err(|e| {
+                Error::new(ErrorDetails::InvalidBaseUrl {
+                    message: format!("Failed to construct KIE chat URL: {e}"),
+                })
+            })?;
 
         let api_key = self
             .credentials
@@ -200,6 +199,7 @@ impl InferenceProvider for KIEProvider {
                 })
             })?;
 
+            tracing::info!("raw_response: {}", raw_response);
             let response: KIEResponse = serde_json::from_str(&raw_response).map_err(|e| {
                 Error::new(ErrorDetails::InferenceServer {
                     message: format!(
@@ -275,11 +275,13 @@ impl InferenceProvider for KIEProvider {
 
         request_body["stream"] = serde_json::json!(true);
 
-        let request_url = KIE_DEFAULT_BASE_URL.join("chat/completions").map_err(|e| {
-            Error::new(ErrorDetails::InvalidBaseUrl {
-                message: format!("Failed to construct KIE chat URL: {e}"),
-            })
-        })?;
+        let request_url = format!("{}/{}/v1/chat/completions", *KIE_API_BASE, self.model_name)
+            .parse::<Url>()
+            .map_err(|e| {
+                Error::new(ErrorDetails::InvalidBaseUrl {
+                    message: format!("Failed to construct KIE chat URL: {e}"),
+                })
+            })?;
 
         let api_key = self
             .credentials
@@ -334,6 +336,7 @@ impl InferenceProvider for KIEProvider {
 }
 #[derive(Debug, Default, Serialize)]
 struct KIERequest<'a> {
+    #[serde(skip_serializing)]
     model: &'a str,
     messages: Vec<OpenAIRequestMessage<'a>>,
 
@@ -387,7 +390,7 @@ impl KIEResponseFormat {
 }
 
 fn apply_inference_params(
-    _request: &mut KIERequest,
+    request: &mut KIERequest,
     inference_params: &ChatCompletionInferenceParamsV2,
 ) {
     let ChatCompletionInferenceParamsV2 {
@@ -397,8 +400,21 @@ fn apply_inference_params(
         verbosity,
     } = inference_params;
 
-    if reasoning_effort.is_some() {
-        warn_inference_parameter_not_supported(PROVIDER_NAME, "reasoning_effort", None);
+    // Apply reasoning_effort if provided
+    if let Some(effort) = reasoning_effort {
+        // Validate and map reasoning_effort to KIE valid values
+        let normalized_effort = match effort.as_str() {
+            "low" | "medium" | "high" => {
+                // Map "medium" to "high" since KIE only supports "low" and "high"
+                if effort == "medium" {
+                    "high"
+                } else {
+                    effort.as_str()
+                }
+            }
+            _ => "high", // default to high
+        };
+        request.reasoning_effort = Some(normalized_effort.to_string());
     }
 
     if service_tier.is_some() {
@@ -857,4 +873,130 @@ mod tests {
         assert!(!kie_request.stream, "Expected stream to be false");
         assert_eq!(kie_request.seed, Some(69), "Expected seed to be 69");
     }
+
+    #[test]
+    fn test_kie_url_construction() {
+        // Test that URLs are constructed correctly with model name
+        let model_name = "gemini-3-pro";
+        let expected_url = format!("{}/{}/v1/chat/completions", *KIE_API_BASE, model_name);
+        
+        assert_eq!(
+            expected_url,
+            "https://api.kie.ai/gemini-3-pro/v1/chat/completions",
+            "Expected URL to include model name in correct format"
+        );
+    }
+
+    #[test]
+    fn test_reasoning_effort_mapping() {
+        let mut request = ModelInferenceRequest {
+            inference_id: Uuid::now_v7(),
+            messages: vec![],
+            system: None,
+            temperature: None,
+            top_p: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            max_tokens: Some(100),
+            stream: false,
+            seed: None,
+            json_mode: ModelInferenceRequestJsonMode::Off,
+            tool_config: None,
+            function_type: crate::inference::types::FunctionType::Chat,
+            output_schema: None,
+            extra_body: Default::default(),
+            ..Default::default()
+        };
+
+        // Test with "medium" reasoning_effort (should be mapped to "high")
+        request.inference_params_v2.reasoning_effort = Some("medium".to_string());
+        
+        let mut kie_request = KIERequest {
+            model: "kie-chat",
+            messages: vec![],
+            temperature: None,
+            max_tokens: Some(100),
+            seed: None,
+            top_p: None,
+            stop: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            stream: false,
+            stream_options: None,
+            response_format: None,
+            tools: None,
+            tool_choice: None,
+            include_thoughts: Some(true),
+            reasoning_effort: Some("high".to_string()),
+        };
+
+        apply_inference_params(&mut kie_request, &request.inference_params_v2);
+        
+        assert_eq!(
+            kie_request.reasoning_effort,
+            Some("high".to_string()),
+            "Expected 'medium' to be mapped to 'high'"
+        );
+
+        // Test with "low" reasoning_effort (should remain "low")
+        request.inference_params_v2.reasoning_effort = Some("low".to_string());
+        
+        let mut kie_request_low = KIERequest {
+            model: "kie-chat",
+            messages: vec![],
+            temperature: None,
+            max_tokens: Some(100),
+            seed: None,
+            top_p: None,
+            stop: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            stream: false,
+            stream_options: None,
+            response_format: None,
+            tools: None,
+            tool_choice: None,
+            include_thoughts: Some(true),
+            reasoning_effort: Some("high".to_string()),
+        };
+
+        apply_inference_params(&mut kie_request_low, &request.inference_params_v2);
+        
+        assert_eq!(
+            kie_request_low.reasoning_effort,
+            Some("low".to_string()),
+            "Expected 'low' to remain 'low'"
+        );
+
+        // Test with "high" reasoning_effort (should remain "high")
+        request.inference_params_v2.reasoning_effort = Some("high".to_string());
+        
+        let mut kie_request_high = KIERequest {
+            model: "kie-chat",
+            messages: vec![],
+            temperature: None,
+            max_tokens: Some(100),
+            seed: None,
+            top_p: None,
+            stop: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            stream: false,
+            stream_options: None,
+            response_format: None,
+            tools: None,
+            tool_choice: None,
+            include_thoughts: Some(true),
+            reasoning_effort: Some("high".to_string()),
+        };
+
+        apply_inference_params(&mut kie_request_high, &request.inference_params_v2);
+        
+        assert_eq!(
+            kie_request_high.reasoning_effort,
+            Some("high".to_string()),
+            "Expected 'high' to remain 'high'"
+        );
+    }
 }
+
