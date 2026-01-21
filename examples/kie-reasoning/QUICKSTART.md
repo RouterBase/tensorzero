@@ -113,7 +113,7 @@ The example uses `config/tensorzero.toml` which defines:
 ```toml
 [functions.solve_problem.variants.kie_reasoning]
 type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-pro"
 max_tokens = 16000
 reasoning_effort = "medium"
 include_thoughts = true
@@ -124,7 +124,7 @@ include_thoughts = true
 ```toml
 [functions.math_reasoning.variants.kie_math]
 type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-pro"
 max_tokens = 8000
 reasoning_effort = "high"
 include_thoughts = true
@@ -136,7 +136,7 @@ system_instructions = "config/math_system_prompt.txt"
 ```toml
 [functions.code_analysis.variants.kie_code_streaming]
 type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-pro"
 max_tokens = 12000
 reasoning_effort = "medium"
 stream = true
@@ -271,7 +271,7 @@ Use the example to compare KIE with other models:
 ```toml
 [functions.solve_problem.variants.kie_reasoning]
 type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-pro"
 max_tokens = 16000
 
 [functions.solve_problem.variants.gpt_4_turbo]
@@ -315,7 +315,7 @@ curl http://localhost:3000/health
 **Problem:** `Model not found` error
 
 **Solution:**
-- Verify `model = "kie::kie-chat"` in tensorzero.toml
+- Verify `model = "kie::gemini-3-pro"` in tensorzero.toml
 - Check that KIE API endpoint is correct
 - Ensure your API key has access to this model
 

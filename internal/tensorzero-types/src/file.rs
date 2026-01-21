@@ -398,6 +398,32 @@ pub enum File {
     ObjectStorageError(ObjectStorageError),
 }
 
+/// Helper to deserialize MIME type from either a MediaType or a string
+fn deserialize_mime_type<'de, D>(deserializer: D) -> Result<MediaType, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => s.parse().map_err(Error::custom),
+        other => Err(Error::custom(format!("Expected string for MIME type, got: {other}"))),
+    }
+}
+
+/// Helper to deserialize optional MIME type from either a MediaType or a string
+fn deserialize_opt_mime_type<'de, D>(deserializer: D) -> Result<Option<MediaType>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(serde_json::Value::String(s)) => s.parse().map(Some).map_err(Error::custom),
+        Some(other) => Err(Error::custom(format!("Expected string for MIME type, got: {other}"))),
+    }
+}
+
 /// Allow deserializing File as either tagged or untagged format.
 /// This is a backwards compatibility feature for a while until we're confident that clients
 /// are sending us the correct tagged versions.
@@ -411,6 +437,7 @@ impl<'de> Deserialize<'de> for File {
         enum TaggedFile {
             Url {
                 url: Url,
+                #[serde(deserialize_with = "deserialize_opt_mime_type")]
                 mime_type: Option<MediaType>,
                 #[serde(default)]
                 detail: Option<Detail>,
@@ -418,7 +445,7 @@ impl<'de> Deserialize<'de> for File {
                 filename: Option<String>,
             },
             Base64 {
-                #[serde(default)]
+                #[serde(default, deserialize_with = "deserialize_opt_mime_type")]
                 mime_type: Option<MediaType>,
                 data: String,
                 #[serde(default)]
@@ -428,6 +455,7 @@ impl<'de> Deserialize<'de> for File {
             },
             ObjectStoragePointer {
                 source_url: Option<Url>,
+                #[serde(deserialize_with = "deserialize_mime_type")]
                 mime_type: MediaType,
                 storage_path: StoragePath,
                 #[serde(default)]
@@ -447,7 +475,7 @@ impl<'de> Deserialize<'de> for File {
         enum LegacyUntaggedFile {
             Url {
                 url: Url,
-                #[serde(default)]
+                #[serde(default, deserialize_with = "deserialize_opt_mime_type")]
                 mime_type: Option<MediaType>,
                 #[serde(default)]
                 detail: Option<Detail>,
@@ -455,7 +483,7 @@ impl<'de> Deserialize<'de> for File {
                 filename: Option<String>,
             },
             Base64 {
-                #[serde(default)]
+                #[serde(default, deserialize_with = "deserialize_opt_mime_type")]
                 mime_type: Option<MediaType>,
                 data: String,
                 #[serde(default)]
@@ -465,6 +493,7 @@ impl<'de> Deserialize<'de> for File {
             },
             ObjectStoragePointer {
                 source_url: Option<Url>,
+                #[serde(deserialize_with = "deserialize_mime_type")]
                 mime_type: MediaType,
                 storage_path: StoragePath,
                 #[serde(default)]

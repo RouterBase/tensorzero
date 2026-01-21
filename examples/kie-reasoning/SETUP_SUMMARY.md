@@ -56,7 +56,7 @@ npm start
 ### 🔑 Key Configuration Parameters
 
 ```toml
-model = "kie::kie-chat"           # KIE model identifier
+model = "kie::gemini-3-pro"           # KIE model identifier
 max_tokens = 16000                # Maximum token limit
 reasoning_effort = "medium"       # "low", "medium", or "high"
 include_thoughts = true           # Include reasoning steps

@@ -1,51 +1,172 @@
-# TensorZero KIE Reasoning Example
+# TensorZero KIE Provider Example
 
-This directory contains examples of using TensorZero with the **KIE (Knowledge-Intensive Engine)** provider for advanced reasoning tasks.
+Comprehensive KIE provider example with reasoning, media processing, and streaming responses.
 
 ## Overview
 
-KIE is an OpenAI-compatible reasoning model optimized for complex problem-solving. This example demonstrates key features of the KIE provider integration with TensorZero:
+KIE provides access to Google Gemini reasoning models optimized for complex problem-solving. This example demonstrates key features of the KIE provider integration with TensorZero:
 
-- **Extended Reasoning**: Configure reasoning effort levels (`low`, `medium`, `high`)
-- **Streaming Support**: Real-time response streaming with reasoning content
+- **Multiple Model Variants**: Gemini 3 Pro/Flash, Gemini 2.5 Pro/Flash
+- **Extended Reasoning**: Configure reasoning effort levels (`low`, `high`)
+- **Streaming Support**: Real-time response streaming
+- **Media Processing**: Image, video, PDF, and multimodal analysis
 - **Thought Blocks**: Access intermediate reasoning steps
-- **Tool Calling**: Support for function/tool calling capabilities
-- **Flexible Configuration**: Mix KIE with other models for comparison
+- **Tool Calling**: Support for function/tool calling
+- **Flexible Configuration**: Mix different KIE models for comparison
 
-## Prerequisites
+## Quick Start
 
-1. **KIE API Key**: Set the `KIE_API_KEY` environment variable with your KIE API credentials
-2. **TensorZero Gateway**: Running locally or accessible at the configured endpoint
+### Prerequisites
+
+1. **KIE API Key**: Set the `KIE_API_KEY` environment variable
+   ```bash
+   export KIE_API_KEY="your-kie-api-key"
+   ```
+
+2. **Start the Gateway**:
+   ```bash
+   RUST_LOG=debug cargo run -r --bin gateway -- --config-file examples/kie-reasoning/config/tensorzero.toml
+   ```
+
 3. **Python 3.10+** or **Node.js 18+** (depending on which example you run)
+
+### Running Tests
+
+Choose your preferred way to test the KIE integration:
+
+**Python (recommended - detailed report)**:
+```bash
+python3 tests.py
+```
+
+**Shell Script**:
+```bash
+bash tests.sh
+```
+
+**Manual curl Commands**:
+```bash
+curl -X POST http://localhost:3000/inference \
+  -H "Content-Type: application/json" \
+  -d '{...}'
+```
 
 ## Configuration
 
-The KIE provider is configured in `config/tensorzero.toml` with several variants:
+KIE provider is configured in `config/tensorzero.toml`. The following models and functions are supported:
 
-### Basic Configuration Example
+### Supported Models
 
+| Model | Speed | Quality | Best For |
+|-------|-------|---------|----------|
+| `gemini-3-pro` | Medium | Excellent | Complex reasoning |
+| `gemini-3-flash` | Fast | Very Good | Balanced use |
+| `gemini-2.5-pro` | Medium | Good | Budget optimization |
+| `gemini-2.5-flash` | Very Fast | Good | Speed critical |
+
+### Configured Functions
+
+#### 1. Problem Solving
 ```toml
+[functions.solve_problem]
 [functions.solve_problem.variants.kie_reasoning]
-type = "chat_completion"
-model = "kie::kie-chat"
+model = "kie::gemini-3-pro"
 max_tokens = 16000
-reasoning_effort = "medium"
-include_thoughts = true
+reasoning_effort = "high"
+
+[functions.solve_problem.variants.kie_reasoning_fast]
+model = "kie::gemini-3-flash"
+max_tokens = 8000
+reasoning_effort = "low"
 ```
 
-### Configuration Parameters
+#### 2. Code Analysis
+```toml
+[functions.code_analysis]
+[functions.code_analysis.variants.kie_code]
+model = "kie::gemini-3-pro"
+max_tokens = 12000
+reasoning_effort = "high"
+```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `model` | string | Model identifier (always `kie::kie-chat`) |
-| `max_tokens` | number | Maximum tokens in response (1-32000) |
-| `reasoning_effort` | string | `low`, `medium`, or `high` - controls depth of reasoning |
-| `include_thoughts` | boolean | Include intermediate reasoning steps in response |
-| `temperature` | float | Sampling temperature (0.0 - 2.0) |
-| `top_p` | float | Nucleus sampling parameter |
-| `stream` | boolean | Enable streaming responses |
+#### 3. Image Analysis
+```toml
+[functions.image_analysis]
+[functions.image_analysis.variants.kie_vision]
+model = "kie::gemini-3-pro"
+max_tokens = 4000
+reasoning_effort = "high"
 
-## Running the Examples
+[functions.image_analysis.variants.kie_vision_fast]
+model = "kie::gemini-3-flash"
+max_tokens = 2000
+reasoning_effort = "low"
+```
+
+#### 4. Video Analysis
+```toml
+[functions.video_analysis]
+[functions.video_analysis.variants.kie_video]
+model = "kie::gemini-3-pro"
+max_tokens = 6000
+reasoning_effort = "high"
+
+[functions.video_analysis.variants.kie_video_2_5]
+model = "kie::gemini-2.5-pro"
+max_tokens = 6000
+reasoning_effort = "high"
+```
+
+#### 5. Document Analysis
+```toml
+[functions.document_analysis]
+[functions.document_analysis.variants.kie_document]
+model = "kie::gemini-3-pro"
+max_tokens = 8000
+reasoning_effort = "high"
+
+[functions.document_analysis.variants.kie_document_fast]
+model = "kie::gemini-3-flash"
+max_tokens = 4000
+reasoning_effort = "low"
+```
+
+#### 6. Multimodal Reasoning
+```toml
+[functions.multimodal_reasoning]
+[functions.multimodal_reasoning.variants.kie_multimodal]
+model = "kie::gemini-3-pro"
+max_tokens = 10000
+reasoning_effort = "high"
+
+[functions.multimodal_reasoning.variants.kie_multimodal_2_5]
+model = "kie::gemini-2.5-pro"
+max_tokens = 10000
+reasoning_effort = "high"
+
+[functions.multimodal_reasoning.variants.kie_multimodal_fast]
+model = "kie::gemini-3-flash"
+max_tokens = 6000
+reasoning_effort = "low"
+```
+
+## Project File Structure
+
+```
+examples/kie-reasoning/
+├── config/
+│   └── tensorzero.toml        # Function and variant configuration
+├── tests.py                    # Python test suite
+├── tests.sh                    # Shell test script
+├── TESTING.md                  # Detailed testing guide
+├── README.md                   # This file
+├── example.py                  # Python example
+├── example.ts                  # TypeScript example
+├── QUICKSTART.md               # Quick start guide
+└── requirements.txt            # Python dependencies
+```
+
+## Usage Examples
 
 ### Python
 
@@ -63,7 +184,7 @@ python example.py
 # Install dependencies
 npm install
 
-# Run the example (if using ts-node)
+# Run the example
 npx ts-node example.ts
 
 # Or compile and run
@@ -71,42 +192,98 @@ npm run build
 node dist/example.js
 ```
 
-## Examples Included
+## Streaming Responses
 
-### Example 1: Problem Solving with Reasoning
-Demonstrates streaming responses with medium reasoning effort. Shows how KIE can work through complex problems step-by-step.
+KIE provider supports streaming for real-time feedback. See [TESTING.md](TESTING.md) for details.
 
-### Example 2: Mathematical Reasoning
-Uses high reasoning effort to prove mathematical theorems. Demonstrates KIE's capability for rigorous logical reasoning.
+## Testing
 
-### Example 3: Code Analysis
-Analyzes code snippets with streaming responses. Useful for real-time feedback applications.
+The complete test suite includes:
 
-### Example 4: Model Comparison
-Compares KIE reasoning with GPT-4 Turbo on the same prompt, allowing you to evaluate the differences.
+1. **Basic Reasoning** - High/low reasoning effort
+2. **Model Variants** - All 4 Gemini models
+3. **Rich Media** - Image, video, PDF analysis
+4. **Multimodal** - Multiple media file combination analysis
+5. **Function Variants** - TOML configuration function usage
+6. **Streaming Response** - Real-time output streaming
 
-## Using Streaming Responses
+Run the tests:
+```bash
+# Python version (recommended)
+python3 tests.py
 
-The KIE provider supports streaming for real-time feedback:
-
-### Python
-```python
-async for chunk in client.chat(
-    function_name="solve_problem",
-    variant_name="kie_reasoning",
-    messages=[{"role": "user", "content": "Your prompt here"}],
-    stream=True,
-):
-    if chunk.text_delta:
-        print(chunk.text_delta, end="", flush=True)
-    # Access reasoning content via chunk.thought_delta if available
+# Shell version
+bash tests.sh
 ```
 
-### TypeScript
-```typescript
-const stream = await client.chat({
-    functionName: "solve_problem",
-    variantName: "kie_reasoning",
+See [TESTING.md](TESTING.md) for detailed testing documentation.
+
+## Supported Media Formats
+
+### Images
+- JPEG (`image/jpeg`)
+- PNG (`image/png`)
+- GIF (`image/gif`)
+- WebP (`image/webp`)
+
+### Videos
+- MP4 (`video/mp4`)
+- WebM (`video/webm`)
+- QuickTime (`video/quicktime`)
+
+### Documents
+- PDF (`application/pdf`)
+- DOCX (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`)
+
+## Performance Recommendations
+
+| Task | Recommended Model | Max Tokens | Reasoning Effort |
+|------|--------|---------|--------|
+| Quick Answer | gemini-3-flash | 2000 | low |
+| General Task | gemini-3-pro | 4000 | low |
+| Complex Analysis | gemini-3-pro | 8000 | high |
+| Image Analysis | kie_vision | 4000 | high |
+| Video Analysis | kie_video | 6000 | high |
+| Document Analysis | kie_document | 8000 | high |
+
+## Troubleshooting
+
+### Gateway Connection Failed
+```
+✗ Gateway is not running!
+```
+**Solution**: Start the gateway
+```bash
+RUST_LOG=debug cargo run -r --bin gateway -- --config-file examples/kie-reasoning/config/tensorzero.toml
+```
+
+### Model Not Found
+```
+"error": "Model kie::unknown-model not found"
+```
+**Solution**: Check model names in `config/tensorzero.toml`
+
+### Media Processing Failed
+```
+"error": "Failed to process media file"
+```
+**Solution**:
+- Verify MIME type is correct
+- Ensure URL is accessible
+- Check if media format is supported
+
+## Related Documentation
+
+- [TESTING.md](TESTING.md) - Complete testing guide
+- [QUICKSTART.md](QUICKSTART.md) - Quick start guide
+- [config/tensorzero.toml](config/tensorzero.toml) - Function configuration
+- [../../IMPLEMENTATION_SUMMARY.md](../../IMPLEMENTATION_SUMMARY.md) - Implementation details
+
+## Related Links
+
+- [KIE Official Documentation](https://www.kie.ai/docs)
+- [TensorZero Documentation](https://tensorzero.com)
+- [Gemini Models](https://ai.google.dev/gemini)
     messages: [{ role: "user", content: "Your prompt here" }],
     stream: true,
 });
