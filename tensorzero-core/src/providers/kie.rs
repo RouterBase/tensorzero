@@ -562,6 +562,7 @@ impl<'a> TryFrom<KIEResponseWithMetadata<'a>> for ProviderInferenceResponse {
                 signature: None,
                 summary: None,
                 provider_type: Some(PROVIDER_TYPE.to_string()),
+                extra_data: None,
             }));
         }
         if let Some(text) = message.content {
@@ -697,6 +698,7 @@ fn kie_to_tensorzero_chunk(
                 summary_id: None,
                 summary_text: None,
                 provider_type: Some(PROVIDER_TYPE.to_string()),
+                extra_data: None,
             }));
         }
         if let Some(tool_calls) = choice.delta.tool_calls {
@@ -764,6 +766,7 @@ fn extract_content_blocks_from_kie_response(response: &KIEResponse) -> Vec<Conte
                 signature: None,
                 summary: None,
                 provider_type: Some(PROVIDER_TYPE.to_string()),
+                extra_data: None,
             }));
         }
 

@@ -437,26 +437,26 @@ def main():
     
     results = []
     
-    # # Basic tests
-    # print(f"\n{BOLD}SECTION 1: BASIC INFERENCE{RESET}")
-    # results.append(test_basic_high_reasoning())
-    # results.append(test_basic_low_reasoning())
+    # Basic tests
+    print(f"\n{BOLD}SECTION 1: BASIC INFERENCE{RESET}")
+    results.append(test_basic_high_reasoning())
+    results.append(test_basic_low_reasoning())
     
-    # # Model tests
-    # print(f"\n{BOLD}SECTION 2: MODEL VARIANTS{RESET}")
-    # results.extend(test_all_models())
+    # Model tests
+    print(f"\n{BOLD}SECTION 2: MODEL VARIANTS{RESET}")
+    results.extend(test_all_models())
     
     # Media tests
     print(f"\n{BOLD}SECTION 3: RICH MEDIA (Images, Videos, PDFs){RESET}")
-    #results.append(test_image_analysis())
-    #results.append(test_video_analysis())
-    #results.append(test_pdf_analysis())
+    results.append(test_image_analysis())
+    results.append(test_video_analysis())
+    results.append(test_pdf_analysis())
     results.append(test_multimodal())
     
-    # # Advanced tests
-    # print(f"\n{BOLD}SECTION 4: ADVANCED FEATURES{RESET}")
-    # results.append(test_function_variant())
-    # results.append(test_streaming())
+    # Advanced tests
+    print(f"\n{BOLD}SECTION 4: ADVANCED FEATURES{RESET}")
+    results.append(test_function_variant())
+    results.append(test_streaming())
     
     # Summary
     print_section("TEST SUMMARY")
