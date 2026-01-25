@@ -6415,7 +6415,7 @@ dependencies = [
 
 [[package]]
 name = "tensorzero-signals"
-version = "0.1.0"
+version = "2026.1.5"
 dependencies = [
  "tokio",
  "tracing",
