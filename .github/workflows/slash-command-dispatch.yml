@@ -12,7 +12,7 @@ on:
 jobs:
   slashCommandDispatch:
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - name: "Check permission"
         id: check-permission

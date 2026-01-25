@@ -15,7 +15,7 @@ jobs:
     name: Cancel General Checks on Failure
     runs-on: ubuntu-latest
     if: |
-      github.repository == 'tensorzero/tensorzero' && (
+      github.repository == 'RouterBase/tensorzero' && (
         (github.event_name == 'status' && (github.event.state == 'failure' || github.event.state == 'error'))
       )
     steps:

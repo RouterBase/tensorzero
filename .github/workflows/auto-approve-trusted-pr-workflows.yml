@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   auto-approve-workflows:
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     runs-on: ubuntu-latest
     steps:
       - name: Auto-approve workflow runs for trusted external PRs

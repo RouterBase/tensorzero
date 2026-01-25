@@ -10,7 +10,7 @@ permissions: {}
 jobs:
   merge-queue-tests:
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - name: Trigger a Buildkite Build on Push using v2.0.0
         uses: buildkite/trigger-pipeline-action@v2.0.0

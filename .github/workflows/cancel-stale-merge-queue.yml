@@ -12,7 +12,7 @@ jobs:
   cancel-workflows:
     name: Cancel Workflow Runs
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero' && github.event.reason != 'merged'
+    if: github.repository == 'RouterBase/tensorzero' && github.event.reason != 'merged'
     steps:
       - name: Get Merge Queue Commit SHA
         id: get-sha

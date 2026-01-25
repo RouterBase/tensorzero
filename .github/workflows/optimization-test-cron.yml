@@ -26,7 +26,7 @@ env:
 
 jobs:
   optimization-tests:
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     runs-on: ubuntu-latest
 
     steps:
