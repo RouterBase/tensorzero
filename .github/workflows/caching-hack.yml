@@ -18,11 +18,11 @@ permissions:
 
 jobs:
   check-python-client-build:
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     uses: ./.github/workflows/python-client-build.yml
 
   build-gateway:
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     strategy:
       matrix:
         runner:

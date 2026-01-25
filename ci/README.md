@@ -37,7 +37,7 @@ This configuration ensures that both PR CI and merge queue jobs will always have
 - Create a new job in 'general.yml' (optionally as a nested workflow invocation - see 'run-merge-queue-checks' for an example)
 - Add the job name to the 'needs' array in 'check-all-general-jobs-passed' inside 'general.yml'
 - If the job should only run as part of the merge queue (not PR CI), add an
-  `if: github.repository == 'tensorzero/tensorzero' && github.event_name == 'merge_group'` condition to your job definition
+  `if: github.repository == 'RouterBase/tensorzero' && github.event_name == 'merge_group'` condition to your job definition
 
 Our 'check-all-general-jobs-passed' job allows jobs to be skipped when running in PR CI, but does not allow _any_ skips
 when running in the merge queue. As a result, your new job will always be required to pass in the merge queue,

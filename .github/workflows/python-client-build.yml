@@ -13,7 +13,7 @@ env:
 jobs:
   linux:
     runs-on: ${{ matrix.platform.runner }}
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     strategy:
       matrix:
         platform:
@@ -68,7 +68,7 @@ jobs:
 
   musllinux:
     runs-on: ${{ matrix.platform.runner }}
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     strategy:
       matrix:
         platform:
@@ -120,7 +120,7 @@ jobs:
 
   windows:
     runs-on: ${{ matrix.platform.runner }}
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     strategy:
       matrix:
         platform:
@@ -171,7 +171,7 @@ jobs:
 
   macos:
     runs-on: ${{ matrix.platform.runner }}
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     strategy:
       matrix:
         platform:
@@ -227,7 +227,7 @@ jobs:
 
   sdist:
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Build sdist
@@ -256,7 +256,7 @@ jobs:
   check-artifacts:
     needs: [linux, musllinux, windows, macos, sdist]
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         with:

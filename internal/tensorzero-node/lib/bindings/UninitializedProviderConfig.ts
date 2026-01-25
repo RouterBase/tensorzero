@@ -68,6 +68,7 @@ export type UninitializedProviderConfig =
     }
   | { type: "groq"; model_name: string; api_key_location: string | null }
   | { type: "hyperbolic"; model_name: string; api_key_location: string | null }
+  | { type: "kie"; model_name: string; api_key_location: string | null }
   | {
       type: "fireworks";
       model_name: string;

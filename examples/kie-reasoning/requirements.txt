@@ -1,0 +1,2 @@
+tensorzero-client>=0.1.0
+requests>=21.2.4
