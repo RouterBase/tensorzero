@@ -1,9 +1,5 @@
 # TensorZero Configuration for KIE (Knowledge-Intensive Engine) Reasoning
 
-# Object storage configuration - disabled since we'll use external URLs
-[object_storage]
-type = "disabled"
-
 [functions.solve_problem]
 type = "chat"
 description = "Solve a complex problem using KIE reasoning"
@@ -178,3 +174,44 @@ type = "chat_completion"
 model = "kie::gemini-3-flash"
 max_tokens = 6000
 reasoning_effort = "low"
+
+[functions.extract_data]
+type = "chat"
+
+# KIE Gemini 3 Pro for advanced multimodal reasoning
+[functions.extract_data.variants.kie_multimodal]
+type = "chat_completion"
+model = "kie::gemini-3-pro"
+max_tokens = 10000
+reasoning_effort = "high"
+
+# KIE Gemini 2.5 Pro for multimodal processing
+[functions.extract_data.variants.kie_multimodal_2_5]
+type = "chat_completion"
+model = "kie::gemini-2.5-pro"
+max_tokens = 10000
+reasoning_effort = "high"
+
+# KIE Gemini 3 Flash for faster multimodal analysis
+[functions.extract_data.variants.kie_multimodal_fast]
+type = "chat_completion"
+model = "kie::gemini-3-flash"
+max_tokens = 6000
+reasoning_effort = "low"
+
+[functions.extract_data.experimentation]
+type = "uniform"
+candidate_variants = ["kie_multimodal_2_5", "kie_multimodal_fast"]
+fallback_variants = ["kie_multimodal"] 
+
+[gateway]
+fetch_and_encode_input_files_before_inference = true
+
+[object_storage]
+type = "s3_compatible"
+endpoint = "http://minio:9000"  # optional: defaults to AWS S3
+# region = "us-east-1"  # optional: depends on your S3-compatible storage provider
+bucket_name = "tensorzero"  # optional: depends on your S3-compatible storage provider
+# IMPORTANT: for production environments, remove the following setting and use a secure method of authentication in
+# combination with a production-grade object storage service.
+allow_http = true
