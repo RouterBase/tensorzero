@@ -362,7 +362,7 @@ def test_function_variant() -> TestResult:
                         {"type": "text", "text": "Describe this image"},
                         {
                             "type": "file",
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg",
+                            "url": "https://i.natgeofe.com/n/548467d8-c5f1-4551-9f58-6817a8d2c45e/NationalGeographic_2572187.jpg",
                             "mime_type": "image/jpeg"
                         }
                     ]

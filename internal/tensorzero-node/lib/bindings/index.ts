@@ -193,6 +193,7 @@ export * from "./JsonInferenceOutput";
 export * from "./JsonInferenceResponse";
 export * from "./JsonMode";
 export * from "./JsonSchemaInfo";
+export * from "./KIEProvider";
 export * from "./KeyInfo";
 export * from "./LLMJudgeConfig";
 export * from "./LLMJudgeIncludeConfig";
