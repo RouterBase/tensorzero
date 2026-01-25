@@ -1257,7 +1257,7 @@ pub enum UninitializedProviderConfig {
     },
     KIE {
         model_name: String,
-        #[cfg_attr(test, ts(type = "string | null"))]
+        #[cfg_attr(feature = "ts-bindings", ts(type = "string | null"))]
         api_key_location: Option<CredentialLocationWithFallback>,
     },
     #[strum(serialize = "fireworks")]
