@@ -25,7 +25,7 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -67,7 +67,7 @@ jobs:
       actions: read
 
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -112,7 +112,7 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
 
     steps:
       - name: Set DNS
@@ -160,7 +160,7 @@ jobs:
       # Permission to upload artifacts
       actions: write
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -210,7 +210,7 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -251,7 +251,7 @@ jobs:
       # Permission for rust-cache to read/write cache
       actions: read
     runs-on: windows-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install Rust toolchain
@@ -549,7 +549,7 @@ jobs:
     runs-on: ubuntu-latest
 
     timeout-minutes: 30
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -688,7 +688,7 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -972,7 +972,7 @@ jobs:
       # Permission for rust-cache
       actions: read
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     env:
       OPENAI_API_KEY: not_used
       FIREWORKS_API_KEY: not_used
@@ -1051,7 +1051,7 @@ jobs:
 
   build-gateway-e2e-container:
     uses: ./.github/workflows/build-gateway-e2e-container.yml
-    if: (github.repository == 'tensorzero/tensorzero' && github.event_name == 'merge_group')
+    if: (github.repository == 'RouterBase/tensorzero' && github.event_name == 'merge_group')
     permissions:
       # Permission to checkout the repository
       contents: read
@@ -1121,7 +1121,7 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero' && github.event_name == 'merge_group'
+    if: github.repository == 'RouterBase/tensorzero' && github.event_name == 'merge_group'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -1159,7 +1159,7 @@ jobs:
     permissions:
       contents: read
       actions: write
-    if: github.repository == 'tensorzero/tensorzero' && github.event_name == 'merge_group'
+    if: github.repository == 'RouterBase/tensorzero' && github.event_name == 'merge_group'
     uses: ./.github/workflows/ui-tests-e2e-model-inference-cache.yml
     with:
       regen_cache: true
@@ -1188,7 +1188,7 @@ jobs:
         build-gateway-e2e-container,
         build-mock-provider-api-container,
       ]
-    if: (github.repository == 'tensorzero/tensorzero' && github.event_name == 'merge_group')
+    if: (github.repository == 'RouterBase/tensorzero' && github.event_name == 'merge_group')
     permissions:
       # Permission to checkout the repository
       contents: read
@@ -1208,7 +1208,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    if: github.repository == 'tensorzero/tensorzero' && github.event_name == 'merge_group'
+    if: github.repository == 'RouterBase/tensorzero' && github.event_name == 'merge_group'
     uses: ./.github/workflows/mocked-batch-test.yml
     needs: [build-mock-provider-api-container]
     secrets: inherit
@@ -1216,7 +1216,7 @@ jobs:
   autopilot-e2e:
     permissions:
       contents: read
-    if: github.repository == 'tensorzero/tensorzero' && github.event_name == 'merge_group'
+    if: github.repository == 'RouterBase/tensorzero' && github.event_name == 'merge_group'
     needs: [build-gateway-e2e-container, publish-dev-docker-hub-images]
     uses: ./.github/workflows/dispatch-autopilot-e2e.yml
     secrets:
@@ -1230,7 +1230,7 @@ jobs:
       attestations: write
       id-token: write
       packages: write
-    if: github.repository == 'tensorzero/tensorzero' && github.event_name == 'merge_group'
+    if: github.repository == 'RouterBase/tensorzero' && github.event_name == 'merge_group'
     uses: ./.github/workflows/docker-hub-publish.yml
     with:
       is_dev: true
@@ -1241,7 +1241,7 @@ jobs:
   # See 'ci/README.md' at the repository root for more details.
   check-all-general-jobs-passed:
     permissions: {}
-    if: always() && github.repository == 'tensorzero/tensorzero'
+    if: always() && github.repository == 'RouterBase/tensorzero'
     needs:
       [
         check-version-consistency,

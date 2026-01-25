@@ -39,7 +39,7 @@ permissions:
 jobs:
   mocked-batch-tests:
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
 
     timeout-minutes: 25
 

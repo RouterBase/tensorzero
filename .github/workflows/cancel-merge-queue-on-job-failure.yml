@@ -13,7 +13,7 @@ jobs:
   check-and-cancel:
     name: Check merge queue workflows and cancel on failure
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     steps:
       - name: Check running workflows on merge queue branches
         run: |

@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   openai-batch:
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -93,7 +93,7 @@ jobs:
           rm -rf batch_inputs/
 
   google-vertex-batch:
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -181,7 +181,7 @@ jobs:
           rm -f /tmp/gcp-key.json
 
   anthropic-batch:
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -235,7 +235,7 @@ jobs:
           "
 
   log-completion:
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     needs: [openai-batch, google-vertex-batch, anthropic-batch]
     runs-on: ubuntu-latest
     steps:

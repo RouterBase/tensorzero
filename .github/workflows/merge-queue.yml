@@ -64,7 +64,7 @@ jobs:
   live-tests:
     name: "live-tests (batch_writes: ${{ matrix.batch_writes }})"
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     permissions:
       # Permission to checkout the repository
       contents: read
@@ -150,7 +150,7 @@ jobs:
   client-tests:
     name: "client-tests (batch_writes: ${{ matrix.batch_writes }})"
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
     permissions:
       # Permission to checkout the repository
       contents: read
@@ -441,7 +441,7 @@ jobs:
   # See 'ci/README.md' at the repository root for more details.
   check-all-tests-passed:
     permissions: {}
-    if: always() && github.repository == 'tensorzero/tensorzero'
+    if: always() && github.repository == 'RouterBase/tensorzero'
     needs: [client-tests, live-tests]
     runs-on: ubuntu-latest
     steps:

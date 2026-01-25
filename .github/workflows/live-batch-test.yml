@@ -41,7 +41,7 @@ permissions:
 jobs:
   batch-tests:
     runs-on: ubuntu-latest
-    if: github.repository == 'tensorzero/tensorzero'
+    if: github.repository == 'RouterBase/tensorzero'
 
     timeout-minutes: 60
 
