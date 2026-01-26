@@ -22,6 +22,7 @@ jobs:
       contents: read
       # Permission to fetch GitHub OIDC token authentication
       id-token: write
+      packages: write
 
     steps:
       # TODO - investigate why using the Namespace checkout action causes
