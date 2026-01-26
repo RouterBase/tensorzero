@@ -17,7 +17,6 @@ jobs:
       contents: read
       # Permission to fetch GitHub OIDC token authentication
       id-token: write
-      packages: write
 
     steps:
       # TODO - investigate why using the Namespace checkout action causes
@@ -31,7 +30,7 @@ jobs:
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
         with:
           # We're using an organization access token, so we need to use the org name for the username.
-          username: tensorzero
+          username: duanbing 
           password: ${{ secrets.DOCKERHUB_LIMITED_TOKEN }}
 
       # We allow the namespace builder setup to fail on Dependabot PRs and PRs from forks
