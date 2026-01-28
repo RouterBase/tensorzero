@@ -24,7 +24,7 @@ services:
       timeout: 1s
 
   postgres:
-    image: postgres:14
+    image: postgres:14-alpine
     environment:
       POSTGRES_DB: tensorzero
       POSTGRES_USER: postgres
@@ -55,7 +55,7 @@ services:
       timeout: 1s
 
   gateway:
-    image: RouterBase/gateway
+    image: routerbase/gateway
     volumes:
       - ./config:/app/config:ro
     command: --config-file /app/config/tensorzero.toml
@@ -81,15 +81,36 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+  # Runs Postgres migrations before the gateway starts
+  gateway-postgres-migrations:
+    image: routerbase/gateway
+    environment:
+      TENSORZERO_POSTGRES_URL: postgres://postgres:postgres@postgres:5432/tensorzero
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      [
+        "gateway --run-postgres-migrations && touch /tmp/migrations_complete.marker && sleep infinity",
+      ]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/migrations_complete.marker"]
+      interval: 5s
+      timeout: 1s
+      retries: 48
+      start_period: 5s
 
   ui:
-    image: RouterBase/ui
+    image: routerbase/ui
     environment:
       TENSORZERO_CLICKHOUSE_URL: http://chuser:chpassword@clickhouse:8123/tensorzero
       TENSORZERO_POSTGRES_URL: postgres://postgres:postgres@postgres:5432/tensorzero
       TENSORZERO_GATEWAY_URL: http://gateway:3000
     ports:
-      - "4000:4000"
+      - "8080:4000"
     depends_on:
       clickhouse:
         condition: service_healthy

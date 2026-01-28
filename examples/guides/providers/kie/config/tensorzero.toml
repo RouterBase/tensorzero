@@ -211,7 +211,7 @@ fetch_and_encode_input_files_before_inference = true
 type = "s3_compatible"
 endpoint = "http://minio:9000"  # optional: defaults to AWS S3
 # region = "us-east-1"  # optional: depends on your S3-compatible storage provider
-bucket_name = "tensorzero"  # optional: depends on your S3-compatible storage provider
+bucket_name = "kie-e2e-tests"  # optional: depends on your S3-compatible storage provider
 # IMPORTANT: for production environments, remove the following setting and use a secure method of authentication in
 # combination with a production-grade object storage service.
 allow_http = true
