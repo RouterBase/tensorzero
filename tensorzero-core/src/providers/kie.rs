@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use reqwest_eventsource::Event;
+use reqwest_sse_stream::Event;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -8,39 +8,47 @@ use std::time::Duration;
 use tokio::time::Instant;
 use url::Url;
 
-use super::helpers::{convert_stream_error, inject_extra_request_data_and_send, inject_extra_request_data_and_send_eventsource};
+use super::helpers::{
+    convert_stream_error, inject_extra_request_data_and_send,
+    inject_extra_request_data_and_send_eventsource,
+};
 use crate::cache::ModelProviderRequest;
 use crate::endpoints::inference::InferenceCredentials;
 use crate::error::{DelayedError, DisplayOrDebugGateway, Error, ErrorDetails};
 use crate::http::{TensorZeroEventSource, TensorzeroHttpClient};
 use crate::inference::InferenceProvider;
-use crate::inference::types::batch::{BatchRequestRow, PollBatchInferenceResponse, StartBatchProviderInferenceResponse};
-use crate::inference::types::chat_completion_inference_params::{ChatCompletionInferenceParamsV2, warn_inference_parameter_not_supported};
+use crate::inference::types::batch::{
+    BatchRequestRow, PollBatchInferenceResponse, StartBatchProviderInferenceResponse,
+};
+use crate::inference::types::chat_completion_inference_params::{
+    ChatCompletionInferenceParamsV2, warn_inference_parameter_not_supported,
+};
 use crate::inference::types::usage::raw_usage_entries_from_value;
 use crate::inference::types::{
-    ApiType, ContentBlockChunk, ContentBlockOutput, Latency, ModelInferenceRequest, ModelInferenceRequestJsonMode, PeekableProviderInferenceResponseStream,
-    ProviderInferenceResponse, ProviderInferenceResponseArgs, ProviderInferenceResponseChunk, ProviderInferenceResponseStreamInner, TextChunk, ThoughtChunk, Thought,
+    ApiType, ContentBlockChunk, ContentBlockOutput, Latency, ModelInferenceRequest,
+    ModelInferenceRequestJsonMode, PeekableProviderInferenceResponseStream,
+    ProviderInferenceResponse, ProviderInferenceResponseArgs, ProviderInferenceResponseChunk,
+    ProviderInferenceResponseStreamInner, TextChunk, Thought, ThoughtChunk,
 };
 use crate::model::{Credential, ModelProvider};
 use crate::providers::chat_completions::prepare_chat_completion_tools;
 use crate::providers::chat_completions::{ChatCompletionTool, ChatCompletionToolChoice};
 use crate::providers::openai::{
-    OpenAIFinishReason, OpenAIRequestMessage, OpenAIResponseToolCall, OpenAIUsage,
-    StreamOptions, SystemOrDeveloper, handle_openai_error, prepare_system_or_developer_message, tensorzero_to_openai_messages,
+    OpenAIFinishReason, OpenAIRequestMessage, OpenAIResponseToolCall, OpenAIUsage, StreamOptions,
+    SystemOrDeveloper, handle_openai_error, prepare_system_or_developer_message,
+    tensorzero_to_openai_messages,
 };
 use uuid::Uuid;
 
 lazy_static! {
     static ref KIE_DEFAULT_BASE_URL: Url = {
         #[expect(clippy::expect_used)]
-        Url::parse("https://api.kie.ai/v1")
-            .expect("Failed to parse KIE_DEFAULT_BASE_URL")
+        Url::parse("https://api.kie.ai/v1").expect("Failed to parse KIE_DEFAULT_BASE_URL")
     };
 }
 
 const PROVIDER_NAME: &str = "KIE";
 pub const PROVIDER_TYPE: &str = "kie";
-
 
 #[derive(Clone, Debug)]
 pub enum KIECredentials {
@@ -61,12 +69,10 @@ impl TryFrom<Credential> for KIECredentials {
             Credential::Static(key) => Ok(KIECredentials::Static(key)),
             Credential::Dynamic(key_name) => Ok(KIECredentials::Dynamic(key_name)),
             Credential::Missing => Ok(KIECredentials::None),
-            Credential::WithFallback { default, fallback } => {
-                Ok(KIECredentials::WithFallback {
-                    default: Box::new((*default).try_into()?),
-                    fallback: Box::new((*fallback).try_into()?),
-                })
-            }
+            Credential::WithFallback { default, fallback } => Ok(KIECredentials::WithFallback {
+                default: Box::new((*default).try_into()?),
+                fallback: Box::new((*fallback).try_into()?),
+            }),
             _ => Err(Error::new(ErrorDetails::Config {
                 message: "Invalid api_key_location for KIE provider".to_string(),
             })),
@@ -81,14 +87,12 @@ impl KIECredentials {
     ) -> Result<&'a SecretString, DelayedError> {
         match self {
             KIECredentials::Static(api_key) => Ok(api_key),
-            KIECredentials::Dynamic(key_name) => {
-                dynamic_api_keys.get(key_name).ok_or_else(|| {
-                    DelayedError::new(ErrorDetails::ApiKeyMissing {
-                        provider_name: PROVIDER_NAME.to_string(),
-                        message: format!("Dynamic api key `{key_name}` is missing"),
-                    })
+            KIECredentials::Dynamic(key_name) => dynamic_api_keys.get(key_name).ok_or_else(|| {
+                DelayedError::new(ErrorDetails::ApiKeyMissing {
+                    provider_name: PROVIDER_NAME.to_string(),
+                    message: format!("Dynamic api key `{key_name}` is missing"),
                 })
-            }
+            }),
             KIECredentials::WithFallback { default, fallback } => {
                 match default.get_api_key(dynamic_api_keys) {
                     Ok(key) => Ok(key),
@@ -109,8 +113,9 @@ impl KIECredentials {
     }
 }
 
-#[derive(Debug, Serialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-bindings", ts(export))]
 pub struct KIEProvider {
     model_name: String,
     #[serde(skip)]
@@ -144,15 +149,16 @@ impl InferenceProvider for KIEProvider {
         dynamic_api_keys: &'a InferenceCredentials,
         model_provider: &'a ModelProvider,
     ) -> Result<ProviderInferenceResponse, Error> {
-        let request_body = serde_json::to_value(KIERequest::new(self.model_name.as_str(), request).await?)
-            .map_err(|e| {
-                Error::new(ErrorDetails::Serialization {
-                    message: format!(
-                        "Error serializing KIE request: {}",
-                        DisplayOrDebugGateway::new(e)
-                    ),
-                })
-            })?;
+        let request_body =
+            serde_json::to_value(KIERequest::new(self.model_name.as_str(), request).await?)
+                .map_err(|e| {
+                    Error::new(ErrorDetails::Serialization {
+                        message: format!(
+                            "Error serializing KIE request: {}",
+                            DisplayOrDebugGateway::new(e)
+                        ),
+                    })
+                })?;
 
         let request_url = KIE_DEFAULT_BASE_URL.join("chat/completions").map_err(|e| {
             Error::new(ErrorDetails::InvalidBaseUrl {
@@ -256,15 +262,16 @@ impl InferenceProvider for KIEProvider {
         dynamic_api_keys: &'a InferenceCredentials,
         model_provider: &'a ModelProvider,
     ) -> Result<(PeekableProviderInferenceResponseStream, String), Error> {
-        let mut request_body = serde_json::to_value(KIERequest::new(self.model_name.as_str(), request).await?)
-            .map_err(|e| {
-                Error::new(ErrorDetails::Serialization {
-                    message: format!(
-                        "Error serializing KIE request: {}",
-                        DisplayOrDebugGateway::new(e)
-                    ),
-                })
-            })?;
+        let mut request_body =
+            serde_json::to_value(KIERequest::new(self.model_name.as_str(), request).await?)
+                .map_err(|e| {
+                    Error::new(ErrorDetails::Serialization {
+                        message: format!(
+                            "Error serializing KIE request: {}",
+                            DisplayOrDebugGateway::new(e)
+                        ),
+                    })
+                })?;
 
         request_body["stream"] = serde_json::json!(true);
 
@@ -295,7 +302,8 @@ impl InferenceProvider for KIEProvider {
         )
         .await?;
 
-        let stream = stream_kie(event_source, start_time, &raw_request, model_inference_id).peekable();
+        let stream =
+            stream_kie(event_source, start_time, &raw_request, model_inference_id).peekable();
 
         Ok((stream, raw_request))
     }
@@ -547,6 +555,7 @@ impl<'a> TryFrom<KIEResponseWithMetadata<'a>> for ProviderInferenceResponse {
                 signature: None,
                 summary: None,
                 provider_type: Some(PROVIDER_TYPE.to_string()),
+                extra_data: None,
             }));
         }
         if let Some(text) = message.content {
@@ -577,6 +586,7 @@ impl<'a> TryFrom<KIEResponseWithMetadata<'a>> for ProviderInferenceResponse {
                 provider_latency: latency,
                 finish_reason: finish_reason.map(OpenAIFinishReason::into),
                 id: model_inference_id,
+                relay_raw_response: None,
             },
         ))
     }
@@ -681,6 +691,7 @@ fn kie_to_tensorzero_chunk(
                 summary_id: None,
                 summary_text: None,
                 provider_type: Some(PROVIDER_TYPE.to_string()),
+                extra_data: None,
             }));
         }
         if let Some(tool_calls) = choice.delta.tool_calls {
@@ -748,6 +759,7 @@ fn extract_content_blocks_from_kie_response(response: &KIEResponse) -> Vec<Conte
                 signature: None,
                 summary: None,
                 provider_type: Some(PROVIDER_TYPE.to_string()),
+                extra_data: None,
             }));
         }
 
@@ -832,8 +844,16 @@ mod tests {
             .await
             .expect("failed to create KIE Request during test");
 
-        assert_eq!(kie_request.temperature, Some(0.5), "Expected temperature to be 0.5");
-        assert_eq!(kie_request.max_tokens, Some(100), "Expected max_tokens to be 100");
+        assert_eq!(
+            kie_request.temperature,
+            Some(0.5),
+            "Expected temperature to be 0.5"
+        );
+        assert_eq!(
+            kie_request.max_tokens,
+            Some(100),
+            "Expected max_tokens to be 100"
+        );
         assert!(!kie_request.stream, "Expected stream to be false");
         assert_eq!(kie_request.seed, Some(69), "Expected seed to be 69");
     }

@@ -49,9 +49,9 @@ use crate::inference::types::{
 };
 use crate::model_table::{
     AnthropicKind, AzureKind, BaseModelTable, DeepSeekKind, FireworksKind,
-    GoogleAIStudioGeminiKind, GroqKind, HyperbolicKind, KIEKind, MistralKind, OpenAIKind, OpenRouterKind,
-    ProviderTypeDefaultCredentials, SGLangKind, ShorthandModelConfig, TGIKind, TogetherKind,
-    VLLMKind, XAIKind,
+    GoogleAIStudioGeminiKind, GroqKind, HyperbolicKind, KIEKind, MistralKind, OpenAIKind,
+    OpenRouterKind, ProviderTypeDefaultCredentials, SGLangKind, ShorthandModelConfig, TGIKind,
+    TogetherKind, VLLMKind, XAIKind,
 };
 use crate::providers::helpers::peek_first_chunk;
 use crate::providers::hyperbolic::HyperbolicProvider;
@@ -1093,6 +1093,7 @@ impl ProviderConfig {
             ProviderConfig::GoogleAIStudioGemini(_) => false,
             ProviderConfig::Groq(_) => false,
             ProviderConfig::Hyperbolic(_) => false,
+            ProviderConfig::KIE(_) => false,
             ProviderConfig::Mistral(_) => false,
             ProviderConfig::OpenRouter(_) => false,
             ProviderConfig::SGLang(_) => false,
@@ -1227,7 +1228,7 @@ pub enum UninitializedProviderConfig {
     },
     KIE {
         model_name: String,
-        #[cfg_attr(test, ts(type = "string | null"))]
+        #[cfg_attr(all(test, feature = "ts-bindings"), ts(type = "string | null"))]
         api_key_location: Option<CredentialLocationWithFallback>,
     },
     #[strum(serialize = "fireworks")]

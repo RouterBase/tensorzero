@@ -28,6 +28,7 @@ uuid = { workspace = true }
 object_store = { workspace = true }
 bytes = "1.10.1"
 reqwest = { workspace = true }
+tensorzero-signals = { path = "../../../internal/tensorzero-signals" }
 
 [dev-dependencies]
 sse-stream = { workspace = true }

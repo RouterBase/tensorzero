@@ -2458,6 +2458,7 @@ dependencies = [
  "tensorzero-auth",
  "tensorzero-core",
  "tensorzero-optimizers",
+ "tensorzero-signals",
  "tensorzero-unsafe-helpers",
  "tokio",
  "tokio-stream",
@@ -3307,9 +3308,9 @@ dependencies = [
 
 [[package]]
 name = "jsonschema"
-version = "0.41.0"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9320368abda84a3aad44953d61e70515681fe43ae94529dff5567e0215b88438"
+checksum = "f80ac113b82d2ca7f3c4b56e88bb28aadbcfb534f258a6f4adf1d4ff3e764798"
 dependencies = [
  "ahash 0.8.12",
  "bytecount",
@@ -3739,6 +3740,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sse-stream",
+ "tensorzero-signals",
  "tokio",
  "tokio-stream",
  "tower",
@@ -4534,6 +4536,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tensorzero-signals",
  "tokio",
  "tokio-rustls",
  "tokio-util",
@@ -5109,9 +5112,9 @@ dependencies = [
 
 [[package]]
 name = "referencing"
-version = "0.41.0"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5773259506800a8c6ef38df3674b061c62c5941162507891ff8b580e93d954e"
+checksum = "eea91dda8cb0c3e8a78b69a78ba2e311c457a109ffd35c4bdbd66286da5dd999"
 dependencies = [
  "ahash 0.8.12",
  "fluent-uri",
@@ -6545,6 +6548,14 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "tensorzero-signals"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

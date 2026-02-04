@@ -17,6 +17,7 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tensorzero_signals::shutdown_signal;
 
 use anyhow::Context as _;
 use bytes::{Bytes, BytesMut};
@@ -452,6 +453,7 @@ async fn health_check_handler(
 async fn run_health_server(
     port: u16,
     task_tracker: tokio_util::task::TaskTracker,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use hyper::server::conn::http1;
     use tokio::net::TcpListener;
@@ -461,20 +463,30 @@ async fn run_health_server(
     tracing::info!("Health check server listening on http://{}", addr);
 
     loop {
-        let (stream, _) = listener.accept().await?;
-        let io = hyper_util::rt::TokioIo::new(stream);
-
-        // Spawn each health connection handler on the provided TaskTracker so
-        // we can track background tasks and await them during shutdown.
-        task_tracker.spawn(async move {
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(health_check_handler))
-                .await
-            {
-                tracing::error!("Error serving health check connection: {:?}", err);
+        tokio::select! {
+            _ = shutdown.recv() => {
+                tracing::info!("Health check server shutting down");
+                break;
             }
-        });
+            accept_result = listener.accept() => {
+                let (stream, _) = accept_result?;
+                let io = hyper_util::rt::TokioIo::new(stream);
+
+                // Spawn each health connection handler on the provided TaskTracker so
+                // we can track background tasks and await them during shutdown.
+                task_tracker.spawn(async move {
+                    if let Err(err) = http1::Builder::new()
+                        .serve_connection(io, service_fn(health_check_handler))
+                        .await
+                    {
+                        tracing::error!("Error serving health check connection: {:?}", err);
+                    }
+                });
+            }
+        }
     }
+
+    Ok(())
 }
 
 pub async fn run_server(args: Args, server_started: oneshot::Sender<SocketAddr>) {
@@ -496,6 +508,22 @@ pub async fn run_server(args: Args, server_started: oneshot::Sender<SocketAddr>)
 
     std::fs::create_dir_all(&args.cache_path).expect("Failed to create cache directory");
 
+    // Create a broadcast channel for shutdown signal
+    let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+    // Start health check server
+    let health_port = args.health_port;
+    // Spawn the health check server on a TaskTracker so its background tasks are tracked
+    // and can be awaited as part of shutdown.
+    let task_tracker = tokio_util::task::TaskTracker::new();
+    let health_tasks_for_server = task_tracker.clone();
+    let shutdown_rx = shutdown_tx.subscribe();
+    task_tracker.spawn(async move {
+        if let Err(e) = run_health_server(health_port, health_tasks_for_server, shutdown_rx).await {
+            tracing::error!("Health check server failed: {:?}", e);
+        }
+    });
+
     let _ = rustls::crypto::ring::default_provider()
         .install_default()
         .inspect_err(|e| tracing::error!("Failed to install rustls ring provider: {e:?}"));
@@ -510,6 +538,7 @@ pub async fn run_server(args: Args, server_started: oneshot::Sender<SocketAddr>)
 
     let client = reqwest::Client::new();
     let args_clone = args.clone();
+    let shutdown_for_proxy = shutdown_tx.subscribe();
     let (server_addr, server) = proxy
         .bind(
             ("0.0.0.0", args.port),
@@ -581,6 +610,8 @@ pub async fn run_server(args: Args, server_started: oneshot::Sender<SocketAddr>)
                     Ok::<_, anyhow::Error>(response)
                 }
             }),
+            task_tracker.clone(),
+            shutdown_for_proxy,
         )
         .await
         .unwrap();
@@ -588,9 +619,13 @@ pub async fn run_server(args: Args, server_started: oneshot::Sender<SocketAddr>)
     // Start health check server
     let health_port = args.health_port;
     // TODO(https://github.com/tensorzero/tensorzero/issues/3983): Audit this callsite
+    let task_tracker_for_health = task_tracker.clone();
+    let shutdown_for_health = shutdown_tx.clone();
     #[expect(clippy::disallowed_methods)]
     tokio::spawn(async move {
-        if let Err(e) = run_health_server(health_port).await {
+        if let Err(e) = run_health_server(health_port,task_tracker_for_health,
+            shutdown_for_health.subscribe(),
+        ).await {
             tracing::error!("Health check server failed: {:?}", e);
         }
     });
@@ -599,5 +634,15 @@ pub async fn run_server(args: Args, server_started: oneshot::Sender<SocketAddr>)
     server_started
         .send(server_addr)
         .expect("Failed to send server started signal");
-    server.await;
+
+    // Run server until shutdown signal is received
+    tokio::select! {
+        _ = server => {}
+        _ = shutdown_signal() => {}
+    }
+
+    // Graceful shutdown: notify all tasks to shut down
+    let _ = shutdown_tx.send(());
+    task_tracker.close();
+    task_tracker.wait().await;
 }
