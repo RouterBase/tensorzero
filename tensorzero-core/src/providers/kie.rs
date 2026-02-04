@@ -110,9 +110,8 @@ impl KIECredentials {
     }
 }
 
-#[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-bindings", ts(export))]
+#[derive(Debug, Serialize)]
 pub struct KIEProvider {
     model_name: String,
     #[serde(skip)]
