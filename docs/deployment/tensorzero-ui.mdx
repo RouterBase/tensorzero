@@ -101,3 +101,18 @@ See the Vite documentation for more details.
 
 Set the environment variable `TENSORZERO_UI_LOG_LEVEL` to control log verbosity.
 The allowed values are `debug`, `info` (default), `warn`, and `error`.
+
+### GitHub login (OAuth App)
+
+The UI's GitHub login uses a GitHub OAuth App (not a GitHub App).
+
+Set the following environment variables to enable login:
+
+- `GITHUB_CLIENT_ID`
+- `GITHUB_CLIENT_SECRET`
+- `GITHUB_CALLBACK_URL`
+- `GITHUB_ALLOWED_ORGS`
+- `GITHUB_ALLOWED_TEAMS` (optional)
+- `SESSION_SECRET` (must be at least 32 chars)
+
+`GITHUB_CALLBACK_URL` must match the OAuth App callback URL exactly (for example, `http://localhost:4000/auth/github/callback`).

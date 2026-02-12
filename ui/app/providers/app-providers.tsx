@@ -4,6 +4,7 @@ import { SidebarProvider } from "~/components/ui/sidebar";
 import { TooltipProvider } from "~/components/ui/tooltip";
 import { Toaster } from "~/components/ui/toaster";
 import { ReadOnlyProvider } from "~/context/read-only";
+import { AuthEnabledProvider } from "~/context/auth-enabled";
 import { AutopilotAvailableProvider } from "~/context/autopilot-available";
 import { ConfigProvider, EMPTY_CONFIG } from "~/context/config";
 import {
@@ -15,6 +16,7 @@ import type { UiConfig } from "~/types/tensorzero";
 
 export interface AppProvidersLoaderData {
   isReadOnly?: boolean;
+  authEnabled?: boolean;
   autopilotAvailable?: boolean;
   config?: UiConfig;
   featureFlags?: FeatureFlags;
@@ -34,21 +36,23 @@ export function AppProviders({ children, loaderData }: AppProvidersProps) {
     <ReactQueryProvider>
       <GlobalToastProvider>
         <ReadOnlyProvider value={loaderData?.isReadOnly ?? false}>
-          <AutopilotAvailableProvider
-            value={loaderData?.autopilotAvailable ?? false}
-          >
-            <FeatureFlagsProvider
-              value={loaderData?.featureFlags ?? DEFAULT_FEATURE_FLAGS}
+          <AuthEnabledProvider value={loaderData?.authEnabled ?? false}>
+            <AutopilotAvailableProvider
+              value={loaderData?.autopilotAvailable ?? false}
             >
-              <ConfigProvider value={loaderData?.config ?? EMPTY_CONFIG}>
-                <SidebarProvider>
-                  <TooltipProvider delayDuration={250}>
-                    {children}
-                  </TooltipProvider>
-                </SidebarProvider>
-              </ConfigProvider>
-            </FeatureFlagsProvider>
-          </AutopilotAvailableProvider>
+              <FeatureFlagsProvider
+                value={loaderData?.featureFlags ?? DEFAULT_FEATURE_FLAGS}
+              >
+                <ConfigProvider value={loaderData?.config ?? EMPTY_CONFIG}>
+                  <SidebarProvider>
+                    <TooltipProvider delayDuration={250}>
+                      {children}
+                    </TooltipProvider>
+                  </SidebarProvider>
+                </ConfigProvider>
+              </FeatureFlagsProvider>
+            </AutopilotAvailableProvider>
+          </AuthEnabledProvider>
         </ReadOnlyProvider>
         <Toaster />
       </GlobalToastProvider>

@@ -13,7 +13,9 @@ import {
   SidebarCollapse,
   SidebarExpand,
 } from "~/components/icons/Icons";
-import { KeyRound, LayoutGrid, Plus } from "lucide-react";
+import { KeyRound, LayoutGrid, LogOut, Plus } from "lucide-react";
+import { Form } from "react-router";
+import { useAuthEnabled } from "~/context/auth-enabled";
 import {
   Sidebar,
   SidebarContent,
@@ -124,6 +126,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { state, toggleSidebar } = useSidebar();
   const activePathUtils = useActivePath();
   const autopilotAvailable = useAutopilotAvailable();
+  const authEnabled = useAuthEnabled();
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -215,6 +218,22 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarFooter className="relative">
         <ReadOnlyBadge />
         <TensorZeroStatusIndicator collapsed={state === "collapsed"} />
+        {authEnabled && (
+          <SidebarMenuItem className="list-none">
+            <Form method="post" action="/logout">
+              <SidebarMenuButton
+                type="submit"
+                tooltip={state === "collapsed" ? "Logout" : undefined}
+                className="flex w-full items-center gap-2"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="whitespace-nowrap transition-opacity duration-200 group-data-[collapsible=icon]:opacity-0">
+                  Logout
+                </span>
+              </SidebarMenuButton>
+            </Form>
+          </SidebarMenuItem>
+        )}
         <SidebarMenuItem className="list-none">
           <SidebarMenuButton
             aria-label="Toggle sidebar"

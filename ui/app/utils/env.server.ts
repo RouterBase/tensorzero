@@ -14,10 +14,17 @@ class EnvironmentVariableError extends Error {
 
 // Note: TENSORZERO_UI_LOG_LEVEL is handled in logger.ts to avoid circular dependencies.
 interface Env {
+  NODE_ENV?: string;
   TENSORZERO_POSTGRES_URL?: string;
   TENSORZERO_UI_READ_ONLY: boolean;
   TENSORZERO_GATEWAY_URL: string;
   TENSORZERO_API_KEY?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
+  GITHUB_CALLBACK_URL?: string;
+  GITHUB_ALLOWED_ORGS?: string;
+  GITHUB_ALLOWED_TEAMS?: string;
+  SESSION_SECRET?: string;
 }
 
 let _env: Env | undefined;
@@ -68,10 +75,17 @@ export function getEnv(): Env {
   }
 
   _env = {
+    NODE_ENV: process.env.NODE_ENV,
     TENSORZERO_POSTGRES_URL: process.env.TENSORZERO_POSTGRES_URL,
     TENSORZERO_UI_READ_ONLY: process.env.TENSORZERO_UI_READ_ONLY === "1",
     TENSORZERO_GATEWAY_URL,
     TENSORZERO_API_KEY: process.env.TENSORZERO_API_KEY,
+    GITHUB_CLIENT_ID: process.env.GITHUB_CLIENT_ID,
+    GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET,
+    GITHUB_CALLBACK_URL: process.env.GITHUB_CALLBACK_URL,
+    GITHUB_ALLOWED_ORGS: process.env.GITHUB_ALLOWED_ORGS,
+    GITHUB_ALLOWED_TEAMS: process.env.GITHUB_ALLOWED_TEAMS,
+    SESSION_SECRET: process.env.SESSION_SECRET,
   };
 
   return _env;

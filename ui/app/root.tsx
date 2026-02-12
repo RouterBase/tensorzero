@@ -38,6 +38,8 @@ import { ContentLayout } from "./components/layout/ContentLayout";
 import { startPeriodicCleanup } from "./utils/evaluations.server";
 import { AppProviders } from "./providers/app-providers";
 import { isReadOnlyMode, readOnlyMiddleware } from "./utils/read-only.server";
+import { authMiddleware } from "./utils/auth-middleware.server";
+import { isAuthEnabled } from "./utils/auth.server";
 import {
   loadFeatureFlags,
   type FeatureFlags,
@@ -61,11 +63,15 @@ export const links: Route.LinksFunction = () => [
   },
 ];
 
-export const middleware: Route.MiddlewareFunction[] = [readOnlyMiddleware];
+export const middleware: Route.MiddlewareFunction[] = [
+  authMiddleware,
+  readOnlyMiddleware,
+];
 
 interface LoaderData {
   config: UiConfig;
   isReadOnly: boolean;
+  authEnabled: boolean;
   autopilotAvailable: boolean;
   featureFlags: FeatureFlags;
   infraError: ClassifiedError | null;
@@ -75,6 +81,7 @@ export async function loader(): Promise<LoaderData> {
   // Initialize evaluation cleanup when the app loads
   startPeriodicCleanup();
   const isReadOnly = isReadOnlyMode();
+  const authEnabled = isAuthEnabled();
   const featureFlags = loadFeatureFlags();
   try {
     // Fetch config and autopilot availability in parallel
@@ -85,6 +92,7 @@ export async function loader(): Promise<LoaderData> {
     return {
       config,
       isReadOnly,
+      authEnabled,
       autopilotAvailable,
       featureFlags,
       infraError: null,
@@ -97,6 +105,7 @@ export async function loader(): Promise<LoaderData> {
       return {
         config: EMPTY_CONFIG,
         isReadOnly,
+        authEnabled,
         autopilotAvailable: false,
         featureFlags,
         infraError: { type: InfraErrorType.GatewayUnavailable },
@@ -106,6 +115,7 @@ export async function loader(): Promise<LoaderData> {
       return {
         config: EMPTY_CONFIG,
         isReadOnly,
+        authEnabled,
         autopilotAvailable: false,
         featureFlags,
         infraError: { type: InfraErrorType.GatewayAuthFailed },
@@ -116,6 +126,7 @@ export async function loader(): Promise<LoaderData> {
       return {
         config: EMPTY_CONFIG,
         isReadOnly,
+        authEnabled,
         autopilotAvailable: false,
         featureFlags,
         infraError: {

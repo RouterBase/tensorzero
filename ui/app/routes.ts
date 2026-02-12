@@ -8,6 +8,10 @@ import {
 export default [
   index("routes/index.tsx"),
 
+  route("login", "routes/login/route.tsx"),
+  route("logout", "routes/logout/route.tsx"),
+  route("auth/github/callback", "routes/auth/github/callback.route.ts"),
+
   // API routes
   ...prefix("api", [
     route(

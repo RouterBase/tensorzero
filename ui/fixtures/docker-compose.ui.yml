@@ -8,6 +8,13 @@ services:
       - TENSORZERO_GATEWAY_URL=${TENSORZERO_GATEWAY_URL:-http://gateway:3000}
       - TENSORZERO_POSTGRES_URL=postgres://postgres:postgres@postgres:5432/tensorzero_ui_fixtures
       - TENSORZERO_UI_FORCE_CACHE_ON
+      # GitHub OAuth App credentials for UI login
+      - GITHUB_CLIENT_ID
+      - GITHUB_CLIENT_SECRET
+      - GITHUB_CALLBACK_URL
+      - GITHUB_ALLOWED_ORGS
+      - GITHUB_ALLOWED_TEAMS
+      - SESSION_SECRET
     env_file:
       - .env
     ports:

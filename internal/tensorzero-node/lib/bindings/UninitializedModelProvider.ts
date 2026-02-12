@@ -21,7 +21,8 @@ export type UninitializedModelProvider = {
       model_name: string;
       api_base: string | null;
       api_key_location: string | null;
-      beta_structured_outputs: boolean;
+      beta_structured_outputs?: boolean;
+      provider_tools: Array<JsonValue>;
     }
   | {
       type: "aws_bedrock";
@@ -32,6 +33,11 @@ export type UninitializedModelProvider = {
        */
       allow_auto_detect_region: boolean;
       endpoint_url: string | null;
+      /**
+       * API key for bearer token authentication (alternative to IAM credentials).
+       * If set, uses `Authorization: Bearer <token>` instead of SigV4 signing.
+       */
+      api_key: string | null;
       access_key_id: string | null;
       secret_access_key: string | null;
       session_token: string | null;
@@ -63,6 +69,7 @@ export type UninitializedModelProvider = {
       location: string;
       project_id: string;
       credential_location: string | null;
+      provider_tools: Array<JsonValue>;
     }
   | {
       type: "gcp_vertex_gemini";
