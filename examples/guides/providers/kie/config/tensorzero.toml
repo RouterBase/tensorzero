@@ -206,6 +206,7 @@ fallback_variants = ["kie_multimodal"]
 
 [gateway]
 fetch_and_encode_input_files_before_inference = true
+auth.enabled = true
 
 [object_storage]
 type = "s3_compatible"

@@ -58,7 +58,8 @@ services:
     image: routerbase/gateway:20250206
     volumes:
       - ./config:/app/config:ro
-    command: --config-file /app/config/tensorzero.toml
+      - gateway_config:/app/routerbase-config:ro
+    command: --config-file /app/config/tensorzero.toml --config-file /app/routerbase-config/rate_limiting.toml
     environment:
       TENSORZERO_CLICKHOUSE_URL: http://chuser:chpassword@clickhouse:8123/tensorzero
       TENSORZERO_POSTGRES_URL: postgres://postgres:postgres@postgres:5432/tensorzero
@@ -129,3 +130,6 @@ services:
 volumes:
   postgres-data:
   clickhouse-data:
+  gateway_config:
+    external: true
+    name: routerbase_gateway_config
