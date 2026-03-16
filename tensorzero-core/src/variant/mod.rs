@@ -51,6 +51,7 @@ pub mod chain_of_thought;
 pub mod chat_completion;
 pub mod dicl;
 pub mod dynamic;
+pub mod kie_media;
 pub mod mixture_of_n;
 
 /// Holds a particular variant implementation, plus additional top-level configuration
@@ -81,6 +82,8 @@ pub enum VariantConfig {
     MixtureOfN(mixture_of_n::MixtureOfNConfig),
     /// DEPRECATED (#5298 / 2026.2+): Use `chat_completion` with reasoning instead.
     ChainOfThought(chain_of_thought::ChainOfThoughtConfig),
+    /// KIE async media-generation (video / image).
+    KieMedia(kie_media::KieMediaConfig),
 }
 
 #[cfg(feature = "pyo3")]
@@ -264,6 +267,7 @@ impl VariantConfig {
             VariantConfig::Dicl(params) => params.weight(),
             VariantConfig::MixtureOfN(params) => params.weight(),
             VariantConfig::ChainOfThought(params) => params.inner.weight(),
+            VariantConfig::KieMedia(params) => params.weight(),
         }
     }
 
@@ -274,6 +278,7 @@ impl VariantConfig {
             VariantConfig::Dicl(params) => params.set_weight(weight),
             VariantConfig::MixtureOfN(params) => params.set_weight(weight),
             VariantConfig::ChainOfThought(params) => params.inner.set_weight(weight),
+            VariantConfig::KieMedia(params) => params.set_weight(weight),
         }
     }
 }
@@ -350,6 +355,18 @@ impl Variant for VariantInfo {
                         .await
                 }
                 VariantConfig::ChainOfThought(params) => {
+                    params
+                        .infer(
+                            Arc::clone(&input),
+                            models,
+                            function,
+                            inference_config,
+                            clients,
+                            inference_params,
+                        )
+                        .await
+                }
+                VariantConfig::KieMedia(params) => {
                     params
                         .infer(
                             Arc::clone(&input),
@@ -449,6 +466,18 @@ impl Variant for VariantInfo {
                         .await
                 }
                 VariantConfig::ChainOfThought(params) => {
+                    params
+                        .infer_stream(
+                            Arc::clone(&input),
+                            models,
+                            function,
+                            inference_config,
+                            clients,
+                            inference_params,
+                        )
+                        .await
+                }
+                VariantConfig::KieMedia(params) => {
                     params
                         .infer_stream(
                             Arc::clone(&input),
@@ -594,6 +623,20 @@ impl Variant for VariantInfo {
                     )
                     .await
             }
+            VariantConfig::KieMedia(params) => {
+                params
+                    .validate(
+                        function,
+                        models,
+                        embedding_models,
+                        templates,
+                        function_name,
+                        variant_name,
+                        global_outbound_http_timeout,
+                        relay,
+                    )
+                    .await
+            }
         }
     }
 
@@ -604,6 +647,7 @@ impl Variant for VariantInfo {
             VariantConfig::Dicl(params) => params.get_all_template_paths(),
             VariantConfig::MixtureOfN(params) => params.get_all_template_paths(),
             VariantConfig::ChainOfThought(params) => params.get_all_template_paths(),
+            VariantConfig::KieMedia(params) => params.get_all_template_paths(),
         }
     }
 
@@ -614,6 +658,7 @@ impl Variant for VariantInfo {
             VariantConfig::Dicl(params) => params.get_all_explicit_template_names(),
             VariantConfig::MixtureOfN(params) => params.get_all_explicit_template_names(),
             VariantConfig::ChainOfThought(params) => params.get_all_explicit_template_names(),
+            VariantConfig::KieMedia(params) => params.get_all_explicit_template_names(),
         }
     }
 }

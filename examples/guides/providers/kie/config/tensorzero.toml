@@ -1,208 +1,160 @@
-# TensorZero Configuration for KIE (Knowledge-Intensive Engine) Reasoning
+# TensorZero — KIE All Models
+#
+# LLM models via OpenAI-compatible endpoint:
+#   POST /openai/v1/chat/completions
+#   { "model": "tensorzero::model_name::<model-name>", ... }
+#
+# Media generation via TensorZero inference endpoint:
+#   POST /inference
+#   { "function_name": "video_generate", "variant_name": "kling_2_1",
+#     "input": { "messages": [{ "role": "user", "content": "A cat playing piano" }] },
+#     "params": { "media_generation": { "callback_url": "https://...", "extra": {"aspect_ratio":"16:9","duration":"5"} } } }
+#
+# ── LLM Chat-Completion Models ────────────────────────────────────────────────
 
-[functions.solve_problem]
-type = "chat"
-description = "Solve a complex problem using KIE reasoning"
+[models."gemini-3-pro"]
+routing = ["kie"]
 
-# KIE Gemini 3 Pro with reasoning enabled
-[functions.solve_problem.variants.kie_reasoning]
-type = "chat_completion"
-model = "kie::gemini-3-pro"
-max_tokens = 16000
-reasoning_effort = "high"
+[models."gemini-3-pro".providers.kie]
+type = "kie"
+model_name = "gemini-3-pro"
 
-# KIE Gemini 3 Pro with extended reasoning
-[functions.solve_problem.variants.kie_extended]
-type = "chat_completion"
-model = "kie::gemini-3-pro"
-max_tokens = 32000
-reasoning_effort = "high"
+[models."gemini-3-flash"]
+routing = ["kie"]
 
-# KIE Gemini 3 Flash (faster inference)
-[functions.solve_problem.variants.kie_flash]
-type = "chat_completion"
-model = "kie::gemini-3-flash"
-max_tokens = 4000
-temperature = 0.7
+[models."gemini-3-flash".providers.kie]
+type = "kie"
+model_name = "gemini-3-flash"
 
-# KIE Gemini 2.5 Pro with reasoning
-[functions.solve_problem.variants.kie_gemini_2_5_pro]
-type = "chat_completion"
-model = "kie::gemini-2.5-pro"
-max_tokens = 16000
-reasoning_effort = "high"
+[models."gemini-2.5-pro"]
+routing = ["kie"]
 
-# KIE Gemini 2.5 Flash (fastest variant)
-[functions.solve_problem.variants.kie_gemini_2_5_flash]
-type = "chat_completion"
-model = "kie::gemini-2.5-flash"
-max_tokens = 8000
-temperature = 0.7
+[models."gemini-2.5-pro".providers.kie]
+type = "kie"
+model_name = "gemini-2.5-pro"
 
-# Comparison: OpenAI for baseline
-[functions.solve_problem.variants.gpt_4_turbo]
-type = "chat_completion"
-model = "openai::gpt-4-turbo"
-max_tokens = 16000
-temperature = 0.7
+[models."gemini-2.5-flash"]
+routing = ["kie"]
 
-[functions.math_reasoning]
-type = "chat"
-description = "Solve math problems with step-by-step reasoning"
+[models."gemini-2.5-flash".providers.kie]
+type = "kie"
+model_name = "gemini-2.5-flash"
 
-# KIE Gemini 3 Pro for math reasoning with maximum reasoning effort
-[functions.math_reasoning.variants.kie_math]
-type = "chat_completion"
-model = "kie::gemini-3-pro"
-max_tokens = 8000
-reasoning_effort = "high"
-system_template = "math_system_prompt.txt"
+[models."gpt-5-2"]
+routing = ["kie"]
 
-# KIE Gemini 2.5 Pro alternative
-[functions.math_reasoning.variants.kie_math_2_5]
-type = "chat_completion"
-model = "kie::gemini-2.5-pro"
-max_tokens = 8000
-reasoning_effort = "high"
-system_template = "math_system_prompt.txt"
+[models."gpt-5-2".providers.kie]
+type = "kie"
+model_name = "gpt-5-2"
 
-[functions.code_analysis]
-type = "chat"
-description = "Analyze code and provide detailed explanations"
+[models."claude-sonnet-4-5"]
+routing = ["kie"]
 
-# KIE Gemini 3 Pro for code analysis
-[functions.code_analysis.variants.kie_code]
-type = "chat_completion"
-model = "kie::gemini-3-pro"
-max_tokens = 12000
-reasoning_effort = "high"
-system_template = "code_system_prompt.txt"
+[models."claude-sonnet-4-5".providers.kie]
+type = "kie"
+model_name = "claude-sonnet-4-5"
 
-# KIE Gemini 3 Flash for faster code analysis
-[functions.code_analysis.variants.kie_code_flash]
-type = "chat_completion"
-model = "kie::gemini-3-flash"
-max_tokens = 12000
-reasoning_effort = "low"
-system_template = "code_system_prompt.txt"
+[models."claude-opus-4-5"]
+routing = ["kie"]
 
-# Streaming variant for real-time feedback (streaming is controlled via API request)
-[functions.code_analysis.variants.kie_code_streaming]
-type = "chat_completion"
-model = "kie::gemini-3-pro"
-max_tokens = 12000
-reasoning_effort = "low"
-system_template = "code_system_prompt.txt"
-# ========================================================================
-# Media Processing Functions
-# ========================================================================
+[models."claude-opus-4-5".providers.kie]
+type = "kie"
+model_name = "claude-opus-4-5"
 
-[functions.image_analysis]
-type = "chat"
-description = "Analyze images and provide detailed descriptions"
+# ── Video Generation Functions ────────────────────────────────────────────────
+#
+# Each function maps to one KIE video model via a kie_media variant.
+# Callers SHOULD pass extra params via params.media_generation.extra:
+#   - Kling models: {"aspect_ratio": "16:9", "duration": "5"}
+#   - Seedance models: (check KIE docs for required fields)
+#   - Wan models: works with just prompt
 
-# KIE Gemini 3 Pro for image analysis
-[functions.image_analysis.variants.kie_vision]
-type = "chat_completion"
-model = "kie::gemini-3-pro"
-reasoning_effort = "high"
-
-# KIE Gemini 3 Flash for faster image analysis
-[functions.image_analysis.variants.kie_vision_fast]
-type = "chat_completion"
-model = "kie::gemini-3-flash"
-max_tokens = 2000
-reasoning_effort = "low"
-
-[functions.video_analysis]
-type = "chat"
-description = "Analyze videos and extract key information"
-
-# KIE Gemini 3 Pro for video analysis
-[functions.video_analysis.variants.kie_video]
-type = "chat_completion"
-model = "kie::gemini-3-pro"
-max_tokens = 6000
-reasoning_effort = "high"
-
-# KIE Gemini 2.5 Pro alternative for video
-[functions.video_analysis.variants.kie_video_2_5]
-type = "chat_completion"
-model = "kie::gemini-2.5-pro"
-max_tokens = 6000
-reasoning_effort = "high"
-
-[functions.document_analysis]
-type = "chat"
-description = "Analyze PDF documents and extract insights"
-
-# KIE Gemini 3 Pro for document analysis
-[functions.document_analysis.variants.kie_document]
-type = "chat_completion"
-model = "kie::gemini-3-pro"
-max_tokens = 8000
-reasoning_effort = "high"
-
-# KIE Gemini 3 Flash for faster document analysis
-[functions.document_analysis.variants.kie_document_fast]
-type = "chat_completion"
-model = "kie::gemini-3-flash"
-max_tokens = 4000
-reasoning_effort = "low"
-
-[functions.multimodal_reasoning]
-type = "chat"
-description = "Perform reasoning across multiple media types (images, videos, documents)"
-
-# KIE Gemini 3 Pro for advanced multimodal reasoning
-[functions.multimodal_reasoning.variants.kie_multimodal]
-type = "chat_completion"
-model = "kie::gemini-3-pro"
-max_tokens = 10000
-reasoning_effort = "high"
-
-# KIE Gemini 2.5 Pro for multimodal processing
-[functions.multimodal_reasoning.variants.kie_multimodal_2_5]
-type = "chat_completion"
-model = "kie::gemini-2.5-pro"
-max_tokens = 10000
-reasoning_effort = "high"
-
-# KIE Gemini 3 Flash for faster multimodal analysis
-[functions.multimodal_reasoning.variants.kie_multimodal_fast]
-type = "chat_completion"
-model = "kie::gemini-3-flash"
-max_tokens = 6000
-reasoning_effort = "low"
-
-[functions.extract_data]
+[functions.video_generate]
 type = "chat"
 
-# KIE Gemini 3 Pro for advanced multimodal reasoning
-[functions.extract_data.variants.kie_multimodal]
-type = "chat_completion"
-model = "kie::gemini-3-pro"
-max_tokens = 10000
-reasoning_effort = "high"
+# ByteDance Seedance
+[functions.video_generate.variants.seedance_1_5_pro]
+type = "kie_media"
+model = "bytedance/seedance-1.5-pro"
+tags = ["video", "generation", "text-to-video"]
 
-# KIE Gemini 2.5 Pro for multimodal processing
-[functions.extract_data.variants.kie_multimodal_2_5]
-type = "chat_completion"
-model = "kie::gemini-2.5-pro"
-max_tokens = 10000
-reasoning_effort = "high"
+# Kling models (require aspect_ratio + duration in extra params)
+[functions.video_generate.variants.kling_2_6]
+type = "kie_media"
+model = "kling-2.6/text-to-video"
+tags = ["video", "generation", "text-to-video"]
 
-# KIE Gemini 3 Flash for faster multimodal analysis
-[functions.extract_data.variants.kie_multimodal_fast]
-type = "chat_completion"
-model = "kie::gemini-3-flash"
-max_tokens = 6000
-reasoning_effort = "low"
+[functions.video_generate.variants.kling_2_1_master]
+type = "kie_media"
+model = "kling/v2-1-master-text-to-video"
+tags = ["video", "generation", "text-to-video"]
 
-[functions.extract_data.experimentation]
-type = "uniform"
-candidate_variants = ["kie_multimodal_2_5", "kie_multimodal_fast"]
-fallback_variants = ["kie_multimodal"] 
+[functions.video_generate.variants.kling_2_1_pro]
+type = "kie_media"
+model = "kling/v2-1-pro"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.kling_2_1_standard]
+type = "kie_media"
+model = "kling/v2-1-standard"
+tags = ["video", "generation", "text-to-video"]
+
+# Wan models (work with just prompt, no extra params required)
+[functions.video_generate.variants.wan_2_6]
+type = "kie_media"
+model = "wan/2-6-text-to-video"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.wan_2_2_turbo]
+type = "kie_media"
+model = "wan/2-2-a14b-text-to-video-turbo"
+tags = ["video", "generation", "text-to-video"]
+
+# ── Image Generation Functions ────────────────────────────────────────────────
+
+[functions.image_generate]
+type = "chat"
+
+# Google Imagen (work with just prompt)
+[functions.image_generate.variants.imagen_4]
+type = "kie_media"
+model = "google/imagen4"
+tags = ["image", "generation", "text-to-image"]
+
+[functions.image_generate.variants.imagen_4_ultra]
+type = "kie_media"
+model = "google/imagen4-ultra"
+tags = ["image", "generation", "text-to-image"]
+
+[functions.image_generate.variants.imagen_4_fast]
+type = "kie_media"
+model = "google/imagen4-fast"
+tags = ["image", "generation", "text-to-image"]
+
+# ByteDance SeedDream (works with just prompt)
+[functions.image_generate.variants.seedream_v4]
+type = "kie_media"
+model = "bytedance/seedream-v4-text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
+# Flux models (require resolution in extra params, e.g. {"resolution": "1024x1024"})
+[functions.image_generate.variants.flux_2_pro]
+type = "kie_media"
+model = "flux-2/pro-text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
+[functions.image_generate.variants.flux_2_flex]
+type = "kie_media"
+model = "flux-2/flex-text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
+# Ideogram
+[functions.image_generate.variants.ideogram_character]
+type = "kie_media"
+model = "ideogram/character"
+tags = ["image", "generation", "text-to-image"]
+
+# ── Gateway & Storage ─────────────────────────────────────────────────────────
 
 [gateway]
 fetch_and_encode_input_files_before_inference = true
@@ -210,9 +162,7 @@ auth.enabled = true
 
 [object_storage]
 type = "s3_compatible"
-endpoint = "http://minio:9000"  # optional: defaults to AWS S3
-# region = "us-east-1"  # optional: depends on your S3-compatible storage provider
-bucket_name = "kie-e2e-tests"  # optional: depends on your S3-compatible storage provider
-# IMPORTANT: for production environments, remove the following setting and use a secure method of authentication in
-# combination with a production-grade object storage service.
+endpoint = "http://minio:9000"
+bucket_name = "kie-e2e-tests"
+# IMPORTANT: for production environments, remove allow_http and use secure auth.
 allow_http = true

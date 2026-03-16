@@ -453,6 +453,7 @@ impl TensorzeroRelay {
             input,
             stream: Some(stream),
             params: InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     temperature: request.temperature,
                     max_tokens: request.max_tokens,

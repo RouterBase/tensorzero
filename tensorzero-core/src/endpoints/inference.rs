@@ -1886,7 +1886,25 @@ pub struct InferenceModels {
 #[cfg_attr(feature = "ts-bindings", ts(export))]
 #[serde(deny_unknown_fields)]
 pub struct InferenceParams {
+    #[serde(default)]
     pub chat_completion: ChatCompletionInferenceParams,
+    #[serde(default)]
+    pub media_generation: MediaGenerationParams,
+}
+
+/// Parameters for KIE media generation (video / image) tasks.
+/// Passed through to KIE's async task API as-is.
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-bindings", ts(export))]
+pub struct MediaGenerationParams {
+    /// User-supplied callback URL. KIE will POST to this URL when the task completes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_url: Option<String>,
+    /// Additional provider-specific parameters (aspect_ratio, resolution, duration, etc.)
+    /// forwarded verbatim to KIE's `input` field.
+    #[serde(default)]
+    pub extra: serde_json::Value,
 }
 
 #[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]

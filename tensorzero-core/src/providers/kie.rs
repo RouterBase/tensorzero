@@ -830,6 +830,126 @@ fn kie_response_to_raw_usage_from_chunk(
     ))
 }
 
+// ── KIE Media Generation (async task API) ─────────────────────────────────────
+
+/// Request body for POST https://api.kie.ai/api/v1/jobs/createTask
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KIECreateTaskRequest<'a> {
+    model: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_back_url: Option<&'a str>,
+    input: &'a serde_json::Value,
+}
+
+/// Response from createTask (data is null when KIE returns an error with HTTP 200)
+#[derive(Debug, Deserialize)]
+struct KIECreateTaskResponse {
+    data: Option<KIECreateTaskData>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KIECreateTaskData {
+    task_id: String,
+}
+
+impl KIEProvider {
+    /// Submit a media generation task to KIE's async task API.
+    /// Returns the KIE task_id on success.
+    pub async fn infer_media(
+        &self,
+        model_name: &str,
+        callback_url: Option<&str>,
+        input: &serde_json::Value,
+        http_client: &crate::http::TensorzeroHttpClient,
+        dynamic_api_keys: &crate::endpoints::inference::InferenceCredentials,
+    ) -> Result<String, crate::error::Error> {
+        let api_key = self
+            .credentials
+            .get_api_key(dynamic_api_keys)
+            .map_err(|e| e.log())?;
+        let url = format!("{}/api/v1/jobs/createTask", *KIE_API_BASE)
+            .parse::<url::Url>()
+            .map_err(|e| {
+                crate::error::Error::new(crate::error::ErrorDetails::InvalidBaseUrl {
+                    message: format!("Failed to construct KIE createTask URL: {e}"),
+                })
+            })?;
+
+        let body = KIECreateTaskRequest {
+            model: model_name,
+            call_back_url: callback_url,
+            input,
+        };
+
+        let raw_body = serde_json::to_string(&body).map_err(|e| {
+            crate::error::Error::new(crate::error::ErrorDetails::Serialization {
+                message: format!("Error serializing KIE createTask request: {e}"),
+            })
+        })?;
+
+        let response = http_client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", api_key.expose_secret()))
+            .header("Content-Type", "application/json")
+            .body(raw_body)
+            .send()
+            .await
+            .map_err(|e| {
+                crate::error::Error::new(crate::error::ErrorDetails::InferenceClient {
+                    message: format!("KIE createTask request failed: {e}"),
+                    status_code: e.status(),
+                    provider_type: PROVIDER_TYPE.to_string(),
+                    raw_request: Some(serde_json::to_string(&body).unwrap_or_default()),
+                    raw_response: None,
+                })
+            })?;
+
+        let status = response.status();
+        let raw = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(crate::error::Error::new(
+                crate::error::ErrorDetails::InferenceServer {
+                    message: format!("KIE createTask returned {status}: {raw}"),
+                    provider_type: PROVIDER_TYPE.to_string(),
+                    raw_request: None,
+                    raw_response: Some(raw),
+                },
+            ));
+        }
+
+        let parsed: KIECreateTaskResponse = serde_json::from_str(&raw).map_err(|e| {
+            crate::error::Error::new(crate::error::ErrorDetails::InferenceServer {
+                message: format!("Failed to parse KIE createTask response: {e}"),
+                provider_type: PROVIDER_TYPE.to_string(),
+                raw_request: None,
+                raw_response: Some(raw.clone()),
+            })
+        })?;
+
+        match parsed.data {
+            Some(d) => Ok(d.task_id),
+            None => {
+                let msg = parsed
+                    .message
+                    .unwrap_or_else(|| "data field is null".to_string());
+                Err(crate::error::Error::new(
+                    crate::error::ErrorDetails::InferenceServer {
+                        message: format!("KIE createTask returned null data: {msg}"),
+                        provider_type: PROVIDER_TYPE.to_string(),
+                        raw_request: None,
+                        raw_response: Some(raw),
+                    },
+                ))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

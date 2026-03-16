@@ -2187,6 +2187,8 @@ impl UninitializedFunctionConfig {
                                 variant_missing_mode = Some(name.clone());
                             }
                         }
+                        // KieMedia variants are for media generation and don't use json_mode
+                        VariantConfig::KieMedia(_) => {}
                     }
                     if let Some(variant_name) = variant_missing_mode {
                         return Err(ErrorDetails::Config {
@@ -2247,6 +2249,8 @@ pub enum UninitializedVariantConfig {
     /// DEPRECATED (#5298 / 2026.2+): Use `chat_completion` with reasoning instead.
     #[serde(rename = "experimental_chain_of_thought")]
     ChainOfThought(UninitializedChainOfThoughtConfig),
+    /// KIE async media-generation (video / image).
+    KieMedia(crate::variant::kie_media::KieMediaConfig),
 }
 
 /// Holds extra information used for enriching error messages
@@ -2287,6 +2291,9 @@ impl UninitializedVariantInfo {
                     "Deprecation Warning (#5298 / 2026.2+): We are deprecating `experimental_chain_of_thought` now that reasoning models are prevalent. Please use a different variant type (e.g. `chat_completion` with reasoning)."
                 );
                 VariantConfig::ChainOfThought(params.load(schemas, error_context)?)
+            }
+            UninitializedVariantConfig::KieMedia(params) => {
+                VariantConfig::KieMedia(params)
             }
         };
         Ok(VariantInfo {
