@@ -89,16 +89,6 @@ type = "kie_media"
 model = "kling/v2-1-master-text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
-[functions.video_generate.variants.kling_2_1_pro]
-type = "kie_media"
-model = "kling/v2-1-pro"
-tags = ["video", "generation", "text-to-video"]
-
-[functions.video_generate.variants.kling_2_1_standard]
-type = "kie_media"
-model = "kling/v2-1-standard"
-tags = ["video", "generation", "text-to-video"]
-
 # Wan models (work with just prompt, no extra params required)
 [functions.video_generate.variants.wan_2_6]
 type = "kie_media"
@@ -146,12 +136,6 @@ tags = ["image", "generation", "text-to-image"]
 [functions.image_generate.variants.flux_2_flex]
 type = "kie_media"
 model = "flux-2/flex-text-to-image"
-tags = ["image", "generation", "text-to-image"]
-
-# Ideogram
-[functions.image_generate.variants.ideogram_character]
-type = "kie_media"
-model = "ideogram/character"
 tags = ["image", "generation", "text-to-image"]
 
 # ── Gateway & Storage ─────────────────────────────────────────────────────────
