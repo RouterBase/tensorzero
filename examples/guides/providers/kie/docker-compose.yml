@@ -104,29 +104,6 @@ services:
       retries: 48
       start_period: 5s
 
-  ui:
-    image: routerbase/ui:20250206
-    environment:
-      NODE_ENV: development
-      TENSORZERO_CLICKHOUSE_URL: http://chuser:chpassword@clickhouse:8123/tensorzero
-      TENSORZERO_POSTGRES_URL: postgres://postgres:postgres@postgres:5432/tensorzero
-      TENSORZERO_GATEWAY_URL: http://gateway:3000
-      TENSORZERO_API_KEY: ${TENSORZERO_SERVICE_KEY:?Environment variable TENSORZERO_SERVICE_KEY must be set.}
-      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?Environment variable GITHUB_CLIENT_ID must be set.}
-      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?Environment variable GITHUB_CLIENT_SECRET must be set.}
-      GITHUB_CALLBACK_URL: ${GITHUB_CALLBACK_URL:?Environment variable GITHUB_CALLBACK_URL must be set.}
-      GITHUB_ALLOWED_ORGS: ${GITHUB_ALLOWED_ORGS:?Environment variable GITHUB_ALLOWED_ORGS must be set.}
-      GITHUB_ALLOWED_TEAMS: ${GITHUB_ALLOWED_TEAMS:-}
-      SESSION_SECRET: ${SESSION_SECRET:?Environment variable SESSION_SECRET must be set.}
-    ports:
-      - "8080:4000"
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-      gateway:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
 
 volumes:
   postgres-data:
