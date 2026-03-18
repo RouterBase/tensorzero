@@ -78,6 +78,10 @@ pub fn build_internal_non_otel_enabled_routes() -> Router<AppStateData> {
             get(endpoints::internal::inference_metadata::get_inference_metadata_handler),
         )
         .route(
+            "/internal/task/{task_id}",
+            get(endpoints::internal::task_query::query_task_handler),
+        )
+        .route(
             "/internal/ui_config",
             get(endpoints::ui::get_config::ui_config_handler),
         )

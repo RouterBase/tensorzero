@@ -78,15 +78,51 @@ type = "kie_media"
 model = "bytedance/seedance-1.5-pro"
 tags = ["video", "generation", "text-to-video"]
 
+[functions.video_generate.variants.seedance_1_5_lite]
+type = "kie_media"
+model = "bytedance/seedance-1.5-lite"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.seedance_2_0]
+type = "kie_media"
+model = "bytedance/seedance-2.0"
+tags = ["video", "generation", "text-to-video"]
+
 # Kling models (require aspect_ratio + duration in extra params)
 [functions.video_generate.variants.kling_2_6]
 type = "kie_media"
 model = "kling-2.6/text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
+[functions.video_generate.variants.kling_2_1]
+type = "kie_media"
+model = "kling/v2-1-text-to-video"
+tags = ["video", "generation", "text-to-video"]
+
 [functions.video_generate.variants.kling_2_1_master]
 type = "kie_media"
 model = "kling/v2-1-master-text-to-video"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.kling_3_0]
+type = "kie_media"
+model = "kling-3.0/video"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.kling_3_0_pro]
+type = "kie_media"
+model = "kling-3.0/video"
+tags = ["video", "generation", "text-to-video"]
+
+# Google Veo models
+[functions.video_generate.variants.veo_2]
+type = "kie_media"
+model = "google/veo2"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.veo_3]
+type = "kie_media"
+model = "veo3"
 tags = ["video", "generation", "text-to-video"]
 
 # Wan models (work with just prompt, no extra params required)
@@ -98,6 +134,16 @@ tags = ["video", "generation", "text-to-video"]
 [functions.video_generate.variants.wan_2_2_turbo]
 type = "kie_media"
 model = "wan/2-2-a14b-text-to-video-turbo"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.wan_2_1_pro]
+type = "kie_media"
+model = "wan/2-6-text-to-video"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.wan_2_1_lite]
+type = "kie_media"
+model = "wan/2-6-text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
 # ── Image Generation Functions ────────────────────────────────────────────────
@@ -127,7 +173,7 @@ type = "kie_media"
 model = "bytedance/seedream-v4-text-to-image"
 tags = ["image", "generation", "text-to-image"]
 
-# Flux models (require resolution in extra params, e.g. {"resolution": "1024x1024"})
+# Flux models
 [functions.image_generate.variants.flux_2_pro]
 type = "kie_media"
 model = "flux-2/pro-text-to-image"
@@ -136,6 +182,22 @@ tags = ["image", "generation", "text-to-image"]
 [functions.image_generate.variants.flux_2_flex]
 type = "kie_media"
 model = "flux-2/flex-text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
+[functions.image_generate.variants.flux_1_1_pro]
+type = "kie_media"
+model = "flux-2/pro-text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
+[functions.image_generate.variants.flux_kontext_pro]
+type = "kie_media"
+model = "flux-kontext/pro-text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
+# Ideogram
+[functions.image_generate.variants.ideogram_3_0]
+type = "kie_media"
+model = "ideogram/v3-text-to-image"
 tags = ["image", "generation", "text-to-image"]
 
 # ── Gateway & Storage ─────────────────────────────────────────────────────────

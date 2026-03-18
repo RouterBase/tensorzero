@@ -111,6 +111,7 @@ services:
       TENSORZERO_CLICKHOUSE_URL: http://chuser:chpassword@clickhouse:8123/tensorzero
       TENSORZERO_POSTGRES_URL: postgres://postgres:postgres@postgres:5432/tensorzero
       TENSORZERO_GATEWAY_URL: http://gateway:3000
+      TENSORZERO_API_KEY: ${TENSORZERO_SERVICE_KEY:?Environment variable TENSORZERO_SERVICE_KEY must be set.}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?Environment variable GITHUB_CLIENT_ID must be set.}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?Environment variable GITHUB_CLIENT_SECRET must be set.}
       GITHUB_CALLBACK_URL: ${GITHUB_CALLBACK_URL:?Environment variable GITHUB_CALLBACK_URL must be set.}
