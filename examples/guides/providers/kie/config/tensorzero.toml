@@ -6,11 +6,18 @@
 #
 # Media generation via TensorZero inference endpoint:
 #   POST /inference
-#   { "function_name": "video_generate", "variant_name": "kling_2_1",
+#   { "function_name": "video_generate", "variant_name": "kling_2_6",
 #     "input": { "messages": [{ "role": "user", "content": "A cat playing piano" }] },
 #     "params": { "media_generation": { "callback_url": "https://...", "extra": {"aspect_ratio":"16:9","duration":"5"} } } }
 #
 # ── LLM Chat-Completion Models ────────────────────────────────────────────────
+
+[models."gemini-3.1-pro"]
+routing = ["kie"]
+
+[models."gemini-3.1-pro".providers.kie]
+type = "kie"
+model_name = "gemini-3.1-pro"
 
 [models."gemini-3-pro"]
 routing = ["kie"]
@@ -40,39 +47,38 @@ routing = ["kie"]
 type = "kie"
 model_name = "gemini-2.5-flash"
 
-[models."gpt-5-2"]
-routing = ["kie"]
-
-[models."gpt-5-2".providers.kie]
-type = "kie"
-model_name = "gpt-5-2"
-
-[models."claude-sonnet-4-5"]
-routing = ["kie"]
-
-[models."claude-sonnet-4-5".providers.kie]
-type = "kie"
-model_name = "claude-sonnet-4-5"
-
-[models."claude-opus-4-5"]
-routing = ["kie"]
-
-[models."claude-opus-4-5".providers.kie]
-type = "kie"
-model_name = "claude-opus-4-5"
-
 # ── Video Generation Functions ────────────────────────────────────────────────
 #
-# Each function maps to one KIE video model via a kie_media variant.
-# Callers SHOULD pass extra params via params.media_generation.extra:
-#   - Kling models: {"aspect_ratio": "16:9", "duration": "5"}
-#   - Seedance models: (check KIE docs for required fields)
-#   - Wan models: works with just prompt
+# Pass extra params via params.media_generation.extra:
+#   - Kling models:    {"aspect_ratio": "16:9", "duration": "5"}
+#   - Hailuo models:   {"duration": 6, "resolution": "720p"}
+#   - Veo/Wan/Grok:    works with just prompt
 
 [functions.video_generate]
 type = "chat"
 
-# ByteDance Seedance
+# ── Google Veo ──
+[functions.video_generate.variants.veo_3]
+type = "kie_media"
+model = "veo3"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.veo_3_fast]
+type = "kie_media"
+model = "veo3_fast"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.veo_2]
+type = "kie_media"
+model = "google/veo2"
+tags = ["video", "generation", "text-to-video"]
+
+# ── ByteDance Seedance ──
+[functions.video_generate.variants.seedance_2_0]
+type = "kie_media"
+model = "bytedance/seedance-2.0"
+tags = ["video", "generation", "text-to-video"]
+
 [functions.video_generate.variants.seedance_1_5_pro]
 type = "kie_media"
 model = "bytedance/seedance-1.5-pro"
@@ -83,25 +89,10 @@ type = "kie_media"
 model = "bytedance/seedance-1.5-lite"
 tags = ["video", "generation", "text-to-video"]
 
-[functions.video_generate.variants.seedance_2_0]
+# ── Kuaishou Kling ──
+[functions.video_generate.variants.kling_3_0_pro]
 type = "kie_media"
-model = "bytedance/seedance-2.0"
-tags = ["video", "generation", "text-to-video"]
-
-# Kling models (require aspect_ratio + duration in extra params)
-[functions.video_generate.variants.kling_2_6]
-type = "kie_media"
-model = "kling-2.6/text-to-video"
-tags = ["video", "generation", "text-to-video"]
-
-[functions.video_generate.variants.kling_2_1]
-type = "kie_media"
-model = "kling/v2-1-text-to-video"
-tags = ["video", "generation", "text-to-video"]
-
-[functions.video_generate.variants.kling_2_1_master]
-type = "kie_media"
-model = "kling/v2-1-master-text-to-video"
+model = "kling-3.0/video"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.kling_3_0]
@@ -109,26 +100,45 @@ type = "kie_media"
 model = "kling-3.0/video"
 tags = ["video", "generation", "text-to-video"]
 
-[functions.video_generate.variants.kling_3_0_pro]
+[functions.video_generate.variants.kling_2_6]
 type = "kie_media"
-model = "kling-3.0/video"
+model = "kling/2.6-text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
-# Google Veo models
-[functions.video_generate.variants.veo_2]
+[functions.video_generate.variants.kling_2_6_i2v]
 type = "kie_media"
-model = "google/veo2"
+model = "kling/2.6-image-to-video"
+tags = ["video", "generation", "image-to-video"]
+
+[functions.video_generate.variants.kling_2_5_turbo]
+type = "kie_media"
+model = "kling/v2.5-turbo-text-to-video-pro"
 tags = ["video", "generation", "text-to-video"]
 
-[functions.video_generate.variants.veo_3]
+[functions.video_generate.variants.kling_2_1_master]
 type = "kie_media"
-model = "veo3"
+model = "kling/v2.1-master-text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
-# Wan models (work with just prompt, no extra params required)
+[functions.video_generate.variants.kling_2_1]
+type = "kie_media"
+model = "kling/v2-1-text-to-video"
+tags = ["video", "generation", "text-to-video"]
+
+# ── Alibaba Wan ──
 [functions.video_generate.variants.wan_2_6]
 type = "kie_media"
-model = "wan/2-6-text-to-video"
+model = "wan/2.6-text-to-video"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.wan_2_6_i2v]
+type = "kie_media"
+model = "wan/2.6-image-to-video"
+tags = ["video", "generation", "image-to-video"]
+
+[functions.video_generate.variants.wan_2_5]
+type = "kie_media"
+model = "wan/2.5-text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.wan_2_2_turbo]
@@ -136,30 +146,52 @@ type = "kie_media"
 model = "wan/2-2-a14b-text-to-video-turbo"
 tags = ["video", "generation", "text-to-video"]
 
-[functions.video_generate.variants.wan_2_1_pro]
+# ── MiniMax Hailuo ──
+[functions.video_generate.variants.hailuo_pro]
 type = "kie_media"
-model = "wan/2-6-text-to-video"
+model = "hailuo/02-text-to-video-pro"
 tags = ["video", "generation", "text-to-video"]
 
-[functions.video_generate.variants.wan_2_1_lite]
+[functions.video_generate.variants.hailuo_standard]
 type = "kie_media"
-model = "wan/2-6-text-to-video"
+model = "hailuo/02-text-to-video-standard"
 tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.hailuo_2_3_i2v_pro]
+type = "kie_media"
+model = "hailuo/2.3-image-to-video-pro"
+tags = ["video", "generation", "image-to-video"]
+
+[functions.video_generate.variants.hailuo_2_3_i2v_standard]
+type = "kie_media"
+model = "hailuo/2.3-image-to-video-standard"
+tags = ["video", "generation", "image-to-video"]
+
+# ── xAI Grok Imagine ──
+[functions.video_generate.variants.grok_imagine]
+type = "kie_media"
+model = "grok-imagine/text-to-video"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.grok_imagine_i2v]
+type = "kie_media"
+model = "grok-imagine/image-to-video"
+tags = ["video", "generation", "image-to-video"]
 
 # ── Image Generation Functions ────────────────────────────────────────────────
 
 [functions.image_generate]
 type = "chat"
 
-# Google Imagen (work with just prompt)
-[functions.image_generate.variants.imagen_4]
-type = "kie_media"
-model = "google/imagen4"
-tags = ["image", "generation", "text-to-image"]
-
+# ── Google Imagen ──
 [functions.image_generate.variants.imagen_4_ultra]
 type = "kie_media"
 model = "google/imagen4-ultra"
+tags = ["image", "generation", "text-to-image"]
+
+[functions.image_generate.variants.imagen_4]
+type = "kie_media"
+model = "google/imagen4"
 tags = ["image", "generation", "text-to-image"]
 
 [functions.image_generate.variants.imagen_4_fast]
@@ -167,13 +199,29 @@ type = "kie_media"
 model = "google/imagen4-fast"
 tags = ["image", "generation", "text-to-image"]
 
-# ByteDance SeedDream (works with just prompt)
+# ── Google Nano Banana ──
+[functions.image_generate.variants.nano_banana_pro]
+type = "kie_media"
+model = "google/nano-banana-pro"
+tags = ["image", "generation", "text-to-image"]
+
+[functions.image_generate.variants.nano_banana]
+type = "kie_media"
+model = "google/nano-banana-2"
+tags = ["image", "generation", "text-to-image"]
+
+# ── ByteDance SeedDream ──
 [functions.image_generate.variants.seedream_v4]
 type = "kie_media"
 model = "bytedance/seedream-v4-text-to-image"
 tags = ["image", "generation", "text-to-image"]
 
-# Flux models
+# ── Black Forest Labs Flux ──
+[functions.image_generate.variants.flux_kontext_pro]
+type = "kie_media"
+model = "flux-kontext/pro-text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
 [functions.image_generate.variants.flux_2_pro]
 type = "kie_media"
 model = "flux-2/pro-text-to-image"
@@ -184,21 +232,76 @@ type = "kie_media"
 model = "flux-2/flex-text-to-image"
 tags = ["image", "generation", "text-to-image"]
 
-[functions.image_generate.variants.flux_1_1_pro]
+[functions.image_generate.variants.flux_2_pro_i2i]
 type = "kie_media"
-model = "flux-2/pro-text-to-image"
-tags = ["image", "generation", "text-to-image"]
+model = "flux-2/pro-image-to-image"
+tags = ["image", "generation", "image-to-image"]
 
-[functions.image_generate.variants.flux_kontext_pro]
-type = "kie_media"
-model = "flux-kontext/pro-text-to-image"
-tags = ["image", "generation", "text-to-image"]
-
-# Ideogram
+# ── Ideogram ──
 [functions.image_generate.variants.ideogram_3_0]
 type = "kie_media"
 model = "ideogram/v3-text-to-image"
 tags = ["image", "generation", "text-to-image"]
+
+[functions.image_generate.variants.ideogram_character]
+type = "kie_media"
+model = "ideogram/character"
+tags = ["image", "generation", "text-to-image"]
+
+# ── Alibaba Qwen ──
+[functions.image_generate.variants.qwen2]
+type = "kie_media"
+model = "qwen2/text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
+[functions.image_generate.variants.qwen]
+type = "kie_media"
+model = "qwen/text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
+# ── xAI Grok Imagine ──
+[functions.image_generate.variants.grok_imagine]
+type = "kie_media"
+model = "grok-imagine/text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
+[functions.image_generate.variants.grok_imagine_i2i]
+type = "kie_media"
+model = "grok-imagine/image-to-image"
+tags = ["image", "generation", "image-to-image"]
+
+# ── Audio Generation Functions ────────────────────────────────────────────────
+#
+# ElevenLabs TTS: pass extra params via params.media_generation.extra:
+#   {"voice_id": "...", "stability": 0.5, "similarity_boost": 0.75}
+
+[functions.audio_generate]
+type = "chat"
+
+[functions.audio_generate.variants.tts_turbo]
+type = "kie_media"
+model = "elevenlabs/text-to-speech-turbo-2-5"
+tags = ["audio", "generation", "text-to-speech"]
+
+[functions.audio_generate.variants.tts_multilingual]
+type = "kie_media"
+model = "elevenlabs/text-to-speech-multilingual-v2"
+tags = ["audio", "generation", "text-to-speech"]
+
+[functions.audio_generate.variants.sound_effect]
+type = "kie_media"
+model = "elevenlabs/sound-effect-v2"
+tags = ["audio", "generation", "sound-effect"]
+
+# ── Speech-to-Text Functions ──────────────────────────────────────────────────
+
+[functions.speech_to_text]
+type = "chat"
+
+[functions.speech_to_text.variants.elevenlabs]
+type = "kie_media"
+model = "elevenlabs/speech-to-text"
+tags = ["audio", "speech-to-text"]
 
 # ── Gateway & Storage ─────────────────────────────────────────────────────────
 
