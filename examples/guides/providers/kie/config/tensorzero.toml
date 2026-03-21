@@ -58,6 +58,16 @@ model_name = "gemini-2.5-flash"
 type = "chat"
 
 # ── Google Veo ──
+[functions.video_generate.variants.veo_3_1_quality]
+type = "kie_media"
+model = "veo3.1/quality"
+tags = ["video", "generation", "text-to-video"]
+
+[functions.video_generate.variants.veo_3_1_fast]
+type = "kie_media"
+model = "veo3.1/fast"
+tags = ["video", "generation", "text-to-video"]
+
 [functions.video_generate.variants.veo_3]
 type = "kie_media"
 model = "veo3"
@@ -178,6 +188,24 @@ type = "kie_media"
 model = "grok-imagine/image-to-video"
 tags = ["video", "generation", "image-to-video"]
 
+# ── Runway ──
+[functions.video_generate.variants.runway_aleph]
+type = "kie_media"
+model = "runway-aleph"
+tags = ["video", "generation", "video-to-video"]
+
+# ── OpenAI Sora ──
+[functions.video_generate.variants.sora_2]
+type = "kie_media"
+model = "sora-2-characters"
+tags = ["video", "generation", "text-to-video"]
+
+# ── Midjourney ──
+[functions.video_generate.variants.midjourney]
+type = "kie_media"
+model = "midjourney/text-to-video"
+tags = ["video", "generation", "text-to-video"]
+
 # ── Image Generation Functions ────────────────────────────────────────────────
 
 [functions.image_generate]
@@ -211,12 +239,22 @@ model = "google/nano-banana-2"
 tags = ["image", "generation", "text-to-image"]
 
 # ── ByteDance SeedDream ──
+[functions.image_generate.variants.seedream_v5_lite]
+type = "kie_media"
+model = "bytedance/seedream-v5-lite"
+tags = ["image", "generation", "text-to-image"]
+
 [functions.image_generate.variants.seedream_v4]
 type = "kie_media"
 model = "bytedance/seedream-v4-text-to-image"
 tags = ["image", "generation", "text-to-image"]
 
 # ── Black Forest Labs Flux ──
+[functions.image_generate.variants.flux_kontext_max]
+type = "kie_media"
+model = "flux-kontext/max"
+tags = ["image", "generation", "text-to-image"]
+
 [functions.image_generate.variants.flux_kontext_pro]
 type = "kie_media"
 model = "flux-kontext/pro-text-to-image"
@@ -270,6 +308,42 @@ type = "kie_media"
 model = "grok-imagine/image-to-image"
 tags = ["image", "generation", "image-to-image"]
 
+# ── OpenAI ──
+[functions.image_generate.variants.openai_4o]
+type = "kie_media"
+model = "openai/4o-image"
+tags = ["image", "generation", "text-to-image"]
+
+# ── Midjourney ──
+[functions.image_generate.variants.midjourney]
+type = "kie_media"
+model = "midjourney/text-to-image"
+tags = ["image", "generation", "text-to-image"]
+
+# ── Ideogram Reframe ──
+[functions.image_generate.variants.ideogram_reframe]
+type = "kie_media"
+model = "ideogram/v3-reframe"
+tags = ["image", "image-editing"]
+
+# ── Recraft ──
+[functions.image_generate.variants.recraft_upscale]
+type = "kie_media"
+model = "recraft/crisp-upscale"
+tags = ["image", "image-editing"]
+
+# ── Topaz ──
+[functions.image_generate.variants.topaz_upscale]
+type = "kie_media"
+model = "topaz/upscale"
+tags = ["image", "image-editing"]
+
+# ── Luma ──
+[functions.image_generate.variants.luma_modify]
+type = "kie_media"
+model = "luma/modify"
+tags = ["image", "image-editing"]
+
 # ── Audio Generation Functions ────────────────────────────────────────────────
 #
 # ElevenLabs TTS: pass extra params via params.media_generation.extra:
@@ -278,6 +352,18 @@ tags = ["image", "generation", "image-to-image"]
 [functions.audio_generate]
 type = "chat"
 
+# ── Suno ──
+[functions.audio_generate.variants.suno_v5]
+type = "kie_media"
+model = "suno/v5"
+tags = ["audio", "generation", "text-to-music"]
+
+[functions.audio_generate.variants.suno_v4_5_plus]
+type = "kie_media"
+model = "suno/v4_5plus"
+tags = ["audio", "generation", "text-to-music"]
+
+# ── ElevenLabs ──
 [functions.audio_generate.variants.tts_turbo]
 type = "kie_media"
 model = "elevenlabs/text-to-speech-turbo-2-5"
@@ -286,6 +372,11 @@ tags = ["audio", "generation", "text-to-speech"]
 [functions.audio_generate.variants.tts_multilingual]
 type = "kie_media"
 model = "elevenlabs/text-to-speech-multilingual-v2"
+tags = ["audio", "generation", "text-to-speech"]
+
+[functions.audio_generate.variants.dialogue]
+type = "kie_media"
+model = "elevenlabs/text-to-dialogue-v3"
 tags = ["audio", "generation", "text-to-speech"]
 
 [functions.audio_generate.variants.sound_effect]
