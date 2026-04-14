@@ -60,95 +60,95 @@ type = "chat"
 # ── Google Veo ──
 [functions.video_generate.variants.veo_3_1_quality]
 type = "kie_media"
-model = "veo3.1/quality"
+model = "veo3.1/quality"  # not in KIE anymore - REMOVED
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.veo_3_1_fast]
 type = "kie_media"
-model = "veo3.1/fast"
+model = "veo3.1/fast"  # not in KIE anymore - REMOVED
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.veo_3]
 type = "kie_media"
-model = "veo3"
+model = "veo3"  # not in KIE anymore - REMOVED
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.veo_3_fast]
 type = "kie_media"
-model = "veo3_fast"
+model = "veo3_fast"  # not in KIE anymore - REMOVED
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.veo_2]
 type = "kie_media"
-model = "google/veo2"
+model = "google/veo2"  # not in KIE anymore - REMOVED
 tags = ["video", "generation", "text-to-video"]
 
 # ── ByteDance Seedance ──
 [functions.video_generate.variants.seedance_2_0]
 type = "kie_media"
-model = "bytedance/seedance-2.0"
+model = "bytedance/seedance-2"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.seedance_1_5_pro]
 type = "kie_media"
-model = "bytedance/seedance-1.5-pro"
+model = "bytedance/seedance-1-5-pro"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.seedance_1_5_lite]
 type = "kie_media"
-model = "bytedance/seedance-1.5-lite"
+model = "bytedance/v1-lite-text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
 # ── Kuaishou Kling ──
 [functions.video_generate.variants.kling_3_0_pro]
 type = "kie_media"
-model = "kling-3.0/video"
+model = "kling/kling-3-0"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.kling_3_0]
 type = "kie_media"
-model = "kling-3.0/video"
+model = "kling/kling-3-0"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.kling_2_6]
 type = "kie_media"
-model = "kling/2.6-text-to-video"
+model = "kling/text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.kling_2_6_i2v]
 type = "kie_media"
-model = "kling/2.6-image-to-video"
+model = "kling/image-to-video"
 tags = ["video", "generation", "image-to-video"]
 
 [functions.video_generate.variants.kling_2_5_turbo]
 type = "kie_media"
-model = "kling/v2.5-turbo-text-to-video-pro"
+model = "kling/v25-turbo-text-to-video-pro"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.kling_2_1_master]
 type = "kie_media"
-model = "kling/v2.1-master-text-to-video"
+model = "kling/v2-1-master-text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.kling_2_1]
 type = "kie_media"
-model = "kling/v2-1-text-to-video"
+model = "kling/v2-1-standard"
 tags = ["video", "generation", "text-to-video"]
 
 # ── Alibaba Wan ──
 [functions.video_generate.variants.wan_2_6]
 type = "kie_media"
-model = "wan/2.6-text-to-video"
+model = "wan/2-6-text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.wan_2_6_i2v]
 type = "kie_media"
-model = "wan/2.6-image-to-video"
+model = "wan/2-6-image-to-video"
 tags = ["video", "generation", "image-to-video"]
 
 [functions.video_generate.variants.wan_2_5]
 type = "kie_media"
-model = "wan/2.5-text-to-video"
+model = "wan/2-5-text-to-video"
 tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.wan_2_2_turbo]
@@ -169,12 +169,12 @@ tags = ["video", "generation", "text-to-video"]
 
 [functions.video_generate.variants.hailuo_2_3_i2v_pro]
 type = "kie_media"
-model = "hailuo/2.3-image-to-video-pro"
+model = "hailuo/2-3-image-to-video-pro"
 tags = ["video", "generation", "image-to-video"]
 
 [functions.video_generate.variants.hailuo_2_3_i2v_standard]
 type = "kie_media"
-model = "hailuo/2.3-image-to-video-standard"
+model = "hailuo/2-3-image-to-video-standard"
 tags = ["video", "generation", "image-to-video"]
 
 # ── xAI Grok Imagine ──
@@ -191,19 +191,19 @@ tags = ["video", "generation", "image-to-video"]
 # ── Runway ──
 [functions.video_generate.variants.runway_aleph]
 type = "kie_media"
-model = "runway-aleph"
+model = "runway-aleph"  # not in KIE - REMOVED
 tags = ["video", "generation", "video-to-video"]
 
 # ── OpenAI Sora ──
 [functions.video_generate.variants.sora_2]
 type = "kie_media"
-model = "sora-2-characters"
+model = "sora2/sora-2-characters"
 tags = ["video", "generation", "text-to-video"]
 
 # ── Midjourney ──
 [functions.video_generate.variants.midjourney]
 type = "kie_media"
-model = "midjourney/text-to-video"
+model = "midjourney/text-to-video"  # not in KIE - REMOVED
 tags = ["video", "generation", "text-to-video"]
 
 # ── Image Generation Functions ────────────────────────────────────────────────
@@ -230,23 +230,23 @@ tags = ["image", "generation", "text-to-image"]
 # ── Google Nano Banana ──
 [functions.image_generate.variants.nano_banana_pro]
 type = "kie_media"
-model = "google/nano-banana-pro"
+model = "google/nano-banana"
 tags = ["image", "generation", "text-to-image"]
 
 [functions.image_generate.variants.nano_banana]
 type = "kie_media"
-model = "google/nano-banana-2"
+model = "google/nanobanana2"
 tags = ["image", "generation", "text-to-image"]
 
 # ── ByteDance SeedDream ──
 [functions.image_generate.variants.seedream_v5_lite]
 type = "kie_media"
-model = "bytedance/seedream-v5-lite"
+model = "seedream/5-lite-text-to-image"
 tags = ["image", "generation", "text-to-image"]
 
 [functions.image_generate.variants.seedream_v4]
 type = "kie_media"
-model = "bytedance/seedream-v4-text-to-image"
+model = "seedream/seedream-v4-text-to-image"
 tags = ["image", "generation", "text-to-image"]
 
 # ── Black Forest Labs Flux ──
@@ -262,17 +262,17 @@ tags = ["image", "generation", "text-to-image"]
 
 [functions.image_generate.variants.flux_2_pro]
 type = "kie_media"
-model = "flux-2/pro-text-to-image"
+model = "flux2/pro-text-to-image"
 tags = ["image", "generation", "text-to-image"]
 
 [functions.image_generate.variants.flux_2_flex]
 type = "kie_media"
-model = "flux-2/flex-text-to-image"
+model = "flux2/flex-text-to-image"
 tags = ["image", "generation", "text-to-image"]
 
 [functions.image_generate.variants.flux_2_pro_i2i]
 type = "kie_media"
-model = "flux-2/pro-image-to-image"
+model = "flux2/pro-image-to-image"
 tags = ["image", "generation", "image-to-image"]
 
 # ── Ideogram ──
@@ -311,13 +311,13 @@ tags = ["image", "generation", "image-to-image"]
 # ── OpenAI ──
 [functions.image_generate.variants.openai_4o]
 type = "kie_media"
-model = "openai/4o-image"
+model = "gpt-image/1-5-text-to-image"
 tags = ["image", "generation", "text-to-image"]
 
 # ── Midjourney ──
 [functions.image_generate.variants.midjourney]
 type = "kie_media"
-model = "midjourney/text-to-image"
+model = "midjourney/text-to-image"  # may not be in KIE
 tags = ["image", "generation", "text-to-image"]
 
 # ── Ideogram Reframe ──
@@ -335,7 +335,7 @@ tags = ["image", "image-editing"]
 # ── Topaz ──
 [functions.image_generate.variants.topaz_upscale]
 type = "kie_media"
-model = "topaz/upscale"
+model = "topaz/image-upscale"
 tags = ["image", "image-editing"]
 
 # ── Luma ──
@@ -393,6 +393,61 @@ type = "chat"
 type = "kie_media"
 model = "elevenlabs/speech-to-text"
 tags = ["audio", "speech-to-text"]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LLM / CHAT FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[functions.solve_problem]
+type = "chat"
+
+[functions.solve_problem.variants.kie_gemini_2_5_pro]
+type = "chat_completion"
+model = "kie::gemini-2.5-pro"
+
+[functions.solve_problem.variants.kie_gemini_2_5_flash]
+type = "chat_completion"
+model = "kie::gemini-2.5-flash"
+
+[functions.solve_problem.variants.kie_reasoning]
+type = "chat_completion"
+model = "kie::gemini-3-pro"
+
+[functions.solve_problem.variants.kie_flash]
+type = "chat_completion"
+model = "kie::gemini-3-flash"
+
+[functions.solve_problem.variants.kie_extended]
+type = "chat_completion"
+model = "kie::gpt-5-2"
+
+# ── Code Analysis ──
+[functions.code_analysis]
+type = "chat"
+
+[functions.code_analysis.variants.kie_code]
+type = "chat_completion"
+model = "kie::claude-sonnet-4-5"
+
+[functions.code_analysis.variants.kie_code_flash]
+type = "chat_completion"
+model = "kie::claude-sonnet-4-5"
+
+# ── Math Reasoning ──
+[functions.math_reasoning]
+type = "chat"
+
+[functions.math_reasoning.variants.kie_math]
+type = "chat_completion"
+model = "kie::gemini-2.5-pro"
+
+# ── Data Extraction ──
+[functions.extract_data]
+type = "chat"
+
+[functions.extract_data.variants.kie_multimodal]
+type = "chat_completion"
+model = "kie::gemini-2.5-pro"
 
 # ── Gateway & Storage ─────────────────────────────────────────────────────────
 
