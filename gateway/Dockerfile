@@ -11,7 +11,11 @@ WORKDIR /src
 FROM chef AS planner
 WORKDIR /app
 COPY . .
-RUN git rev-parse HEAD
+# Skip the git rev-parse sanity check — when this submodule is built
+# from RouterBase's outer worktree, `.git` is a pointer file to
+# `../../.git/modules/gateway/tensorzero`, which lies outside the
+# docker build context. Nothing downstream consumes the rev anyway.
+RUN git rev-parse HEAD || true
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder

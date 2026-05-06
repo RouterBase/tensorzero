@@ -2187,7 +2187,7 @@ impl UninitializedFunctionConfig {
                                 variant_missing_mode = Some(name.clone());
                             }
                         }
-                        // KieMedia variants are for media generation and don't use json_mode
+                        // Media variants are for media generation and don't use json_mode
                         VariantConfig::KieMedia(_) => {}
                     }
                     if let Some(variant_name) = variant_missing_mode {
@@ -2292,9 +2292,7 @@ impl UninitializedVariantInfo {
                 );
                 VariantConfig::ChainOfThought(params.load(schemas, error_context)?)
             }
-            UninitializedVariantConfig::KieMedia(params) => {
-                VariantConfig::KieMedia(params)
-            }
+            UninitializedVariantConfig::KieMedia(params) => VariantConfig::KieMedia(params),
         };
         Ok(VariantInfo {
             inner,

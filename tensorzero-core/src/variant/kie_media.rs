@@ -36,6 +36,7 @@ use crate::inference::types::{
 use crate::minijinja_util::TemplateConfig;
 use crate::model::ModelTable;
 use crate::providers::kie::{KIECredentials, KIEProvider, PROVIDER_TYPE as KIE_PROVIDER_TYPE};
+use crate::providers::novita::{NovitaMediaProxyConfig, NovitaProvider};
 use crate::relay::TensorzeroRelay;
 
 use super::{InferenceConfig, ModelUsedInfo, Variant};
@@ -56,6 +57,19 @@ pub struct KieMediaConfig {
     /// If omitted, RouterBase infers tags from the function name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Optional non-KIE upstream proxy configuration. This keeps the
+    /// RouterBase-facing contract on `kie_media` while letting TZ forward
+    /// specific variants to other media providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<MediaProxyConfig>,
+}
+
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[cfg_attr(feature = "ts-bindings", ts(export))]
+#[serde(tag = "provider", rename_all = "snake_case")]
+pub enum MediaProxyConfig {
+    Novita(NovitaMediaProxyConfig),
 }
 
 impl KieMediaConfig {
@@ -103,15 +117,31 @@ impl Variant for KieMediaConfig {
         };
         let kie_provider = KIEProvider::new(self.model.to_string(), credentials);
 
-        let task_id = kie_provider
-            .infer_media(
-                &self.model,
-                inference_params.media_generation.callback_url.as_deref(),
-                &kie_input,
-                &clients.http_client,
-                &clients.credentials,
-            )
-            .await?;
+        let task_id = match &self.proxy {
+            Some(proxy) => match proxy {
+                MediaProxyConfig::Novita(proxy) => {
+                    NovitaProvider::infer_media_proxy(
+                        proxy,
+                        inference_params.media_generation.callback_url.as_deref(),
+                        &kie_input,
+                        &clients.http_client,
+                        &clients.credentials,
+                    )
+                    .await?
+                }
+            },
+            None => {
+                kie_provider
+                    .infer_media(
+                        &self.model,
+                        inference_params.media_generation.callback_url.as_deref(),
+                        &kie_input,
+                        &clients.http_client,
+                        &clients.credentials,
+                    )
+                    .await?
+            }
+        };
 
         // Serialize the task_id as a JSON string so RouterBase can parse it.
         let response_text = serde_json::to_string(&serde_json::json!({ "task_id": task_id }))
@@ -165,6 +195,17 @@ impl Variant for KieMediaConfig {
                 message: "kie_media variant requires a non-empty `model` field".to_string(),
             }
             .into());
+        }
+        if let Some(proxy) = &self.proxy {
+            let path = match proxy {
+                MediaProxyConfig::Novita(proxy) => &proxy.path,
+            };
+            if path.is_empty() {
+                return Err(ErrorDetails::Config {
+                    message: "kie_media proxy requires a non-empty `path` field".to_string(),
+                }
+                .into());
+            }
         }
         Ok(())
     }
