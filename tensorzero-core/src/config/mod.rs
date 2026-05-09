@@ -2188,7 +2188,7 @@ impl UninitializedFunctionConfig {
                             }
                         }
                         // Media variants are for media generation and don't use json_mode
-                        VariantConfig::KieMedia(_) => {}
+                        VariantConfig::Media(_) => {}
                     }
                     if let Some(variant_name) = variant_missing_mode {
                         return Err(ErrorDetails::Config {
@@ -2250,7 +2250,7 @@ pub enum UninitializedVariantConfig {
     #[serde(rename = "experimental_chain_of_thought")]
     ChainOfThought(UninitializedChainOfThoughtConfig),
     /// KIE async media-generation (video / image).
-    KieMedia(crate::variant::kie_media::KieMediaConfig),
+    Media(crate::variant::media::MediaConfig),
 }
 
 /// Holds extra information used for enriching error messages
@@ -2292,7 +2292,7 @@ impl UninitializedVariantInfo {
                 );
                 VariantConfig::ChainOfThought(params.load(schemas, error_context)?)
             }
-            UninitializedVariantConfig::KieMedia(params) => VariantConfig::KieMedia(params),
+            UninitializedVariantConfig::Media(params) => VariantConfig::Media(params),
         };
         Ok(VariantInfo {
             inner,

@@ -492,7 +492,7 @@ fn extract_chat_completion_from_variant_info(
         | VariantConfig::Dicl(_)
         | VariantConfig::MixtureOfN(_)
         | VariantConfig::ChainOfThought(_)
-        | VariantConfig::KieMedia(_) => {
+        | VariantConfig::Media(_) => {
             tracing::warn!(
                 "Skipping non-ChatCompletion variant '{}' (GEPA only supports ChatCompletion variants)",
                 variant_name

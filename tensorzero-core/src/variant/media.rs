@@ -11,7 +11,7 @@
 //! type = "chat"
 //!
 //! [functions.video_generate.variants.seedance]
-//! type = "kie_media"
+//! type = "media"
 //! model = "bytedance/seedance-1.5-pro"
 //! ```
 
@@ -41,11 +41,11 @@ use crate::relay::TensorzeroRelay;
 
 use super::{InferenceConfig, ModelUsedInfo, Variant};
 
-/// Configuration for a `kie_media` variant.
+/// Configuration for a `media` variant.
 #[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
 #[cfg_attr(feature = "ts-bindings", ts(export))]
-pub struct KieMediaConfig {
+pub struct MediaConfig {
     /// KIE model name passed verbatim to the createTask API,
     /// e.g. `"bytedance/seedance-1.5-pro"` or `"kling/kling-3.0"`.
     pub model: Arc<str>,
@@ -58,7 +58,7 @@ pub struct KieMediaConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     /// Optional non-KIE upstream proxy configuration. This keeps the
-    /// RouterBase-facing contract on `kie_media` while letting TZ forward
+    /// RouterBase-facing contract on `media` while letting TZ forward
     /// specific variants to other media providers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<MediaProxyConfig>,
@@ -72,7 +72,7 @@ pub enum MediaProxyConfig {
     Novita(NovitaMediaProxyConfig),
 }
 
-impl KieMediaConfig {
+impl MediaConfig {
     pub fn weight(&self) -> Option<f64> {
         self.weight
     }
@@ -82,7 +82,7 @@ impl KieMediaConfig {
     }
 }
 
-impl Variant for KieMediaConfig {
+impl Variant for MediaConfig {
     async fn infer(
         &self,
         input: Arc<LazyResolvedInput>,
@@ -170,9 +170,9 @@ impl Variant for KieMediaConfig {
         _inference_params: InferenceParams,
     ) -> Result<(InferenceResultStream, ModelUsedInfo), Error> {
         // Media generation is an async task — streaming is not meaningful here.
-        // Callers should always set stream=false for kie_media variants.
+        // Callers should always set stream=false for media variants.
         Err(ErrorDetails::InvalidRequest {
-            message: "Streaming is not supported for kie_media variants. \
+            message: "Streaming is not supported for media variants. \
                       Set `stream: false` in your inference request."
                 .to_string(),
         }
@@ -192,7 +192,7 @@ impl Variant for KieMediaConfig {
     ) -> Result<(), Error> {
         if self.model.is_empty() {
             return Err(ErrorDetails::Config {
-                message: "kie_media variant requires a non-empty `model` field".to_string(),
+                message: "media variant requires a non-empty `model` field".to_string(),
             }
             .into());
         }
@@ -202,7 +202,7 @@ impl Variant for KieMediaConfig {
             };
             if path.is_empty() {
                 return Err(ErrorDetails::Config {
-                    message: "kie_media proxy requires a non-empty `path` field".to_string(),
+                    message: "media proxy requires a non-empty `path` field".to_string(),
                 }
                 .into());
             }
@@ -253,7 +253,7 @@ fn extract_prompt_text(input: &LazyResolvedInput) -> Result<String, Error> {
         .ok_or_else(|| {
             ErrorDetails::InvalidRequest {
                 message:
-                    "kie_media variant requires at least one user text message as the prompt"
+                    "media variant requires at least one user text message as the prompt"
                         .to_string(),
             }
             .into()

@@ -538,7 +538,7 @@ impl UninitializedEvaluatorConfig {
                         VariantConfig::ChainOfThought(variant) => {
                             variant.inner.set_weight(Some(1.0));
                         }
-                        VariantConfig::KieMedia(variant) => {
+                        VariantConfig::Media(variant) => {
                             variant.set_weight(Some(1.0));
                         }
                     };
@@ -1260,9 +1260,9 @@ fn check_convert_variant_to_llm_judge_variant(
                 },
             ))
         }
-        VariantConfig::KieMedia(_) => Err(ErrorDetails::Config {
+        VariantConfig::Media(_) => Err(ErrorDetails::Config {
             message:
-                "KieMedia variants cannot be used as LLM judge variants".to_string(),
+                "Media variants cannot be used as LLM judge variants".to_string(),
         }
         .into()),
     }
