@@ -3,8 +3,8 @@ use schemars::JsonSchema;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::time::Instant;
 use url::Url;
 use uuid::Uuid;
@@ -46,6 +46,17 @@ pub enum NovitaRequestShape {
     VeoTextToVideo,
     VeoImageToVideo,
     Veo31ImageToVideo,
+    /// OpenAI Sora 2, text-to-video (basic). `professional` is forced
+    /// to `false` server-side; the operator picks the Pro tier by
+    /// routing to the `Sora2ProTextToVideo` variant instead.
+    Sora2TextToVideo,
+    /// OpenAI Sora 2, text-to-video (Pro). Same Novita endpoint as
+    /// `Sora2TextToVideo` but `professional` is forced to `true`.
+    Sora2ProTextToVideo,
+    /// OpenAI Sora 2, image-to-video (basic).
+    Sora2ImageToVideo,
+    /// OpenAI Sora 2, image-to-video (Pro).
+    Sora2ProImageToVideo,
 }
 
 impl NovitaProvider {
@@ -240,6 +251,20 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "sample_count",
             "seed",
         ],
+        // Sora 2 text-to-video. Per Novita's
+        // `/v3/async/sora-2-text2video` doc: prompt (auto), size,
+        // duration. `professional` is set explicitly below based on
+        // the shape (basic vs Pro).
+        NovitaRequestShape::Sora2TextToVideo | NovitaRequestShape::Sora2ProTextToVideo => {
+            &["size", "duration"]
+        }
+        // Sora 2 image-to-video. Per `/v3/async/sora-2-img2video`:
+        // prompt (auto), image (URL or Base64 string — passed
+        // through as a single `image` field, no URL/Base64 split),
+        // resolution, duration.
+        NovitaRequestShape::Sora2ImageToVideo | NovitaRequestShape::Sora2ProImageToVideo => {
+            &["image", "resolution", "duration"]
+        }
     };
 
     if let Some(input_obj) = input.as_object() {
@@ -285,6 +310,24 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
                 body.insert("last_image_url".into(), Value::from(value));
             }
         }
+    }
+
+    // Sora 2 routes the Pro/non-Pro distinction through a single Novita
+    // endpoint with a `professional` body field. Force the value
+    // server-side so the user can't accidentally upgrade to Pro by
+    // passing `professional: true` to the basic variant.
+    if matches!(
+        shape,
+        NovitaRequestShape::Sora2TextToVideo
+            | NovitaRequestShape::Sora2ProTextToVideo
+            | NovitaRequestShape::Sora2ImageToVideo
+            | NovitaRequestShape::Sora2ProImageToVideo
+    ) {
+        let pro = matches!(
+            shape,
+            NovitaRequestShape::Sora2ProTextToVideo | NovitaRequestShape::Sora2ProImageToVideo
+        );
+        body.insert("professional".into(), Value::Bool(pro));
     }
 
     if matches!(shape, NovitaRequestShape::GptImageEdit) && !body.contains_key("image") {
@@ -371,14 +414,12 @@ fn parse_urls(body: &Value) -> Vec<String> {
                 let urls: Vec<String> = arr
                     .iter()
                     .filter_map(|item| {
-                        item.as_str()
-                            .map(ToString::to_string)
-                            .or_else(|| {
-                                item.get("video_url")
-                                    .or_else(|| item.get("url"))
-                                    .and_then(Value::as_str)
-                                    .map(ToString::to_string)
-                            })
+                        item.as_str().map(ToString::to_string).or_else(|| {
+                            item.get("video_url")
+                                .or_else(|| item.get("url"))
+                                .and_then(Value::as_str)
+                                .map(ToString::to_string)
+                        })
                     })
                     .collect();
                 if !urls.is_empty() {
@@ -396,7 +437,10 @@ async fn poll_async_result(
     api_key: &str,
     task_id: &str,
 ) -> Result<Value, Error> {
-    let url = format!("{}/v3/async/task-result?task_id={task_id}", *NOVITA_API_BASE);
+    let url = format!(
+        "{}/v3/async/task-result?task_id={task_id}",
+        *NOVITA_API_BASE
+    );
     let deadline = Instant::now() + REQUEST_TIMEOUT;
     let poll_interval = Duration::from_secs(4);
 
