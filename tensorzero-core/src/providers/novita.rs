@@ -316,6 +316,11 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
     // endpoint with a `professional` body field. Force the value
     // server-side so the user can't accidentally upgrade to Pro by
     // passing `professional: true` to the basic variant.
+    //
+    // Also coerce `duration` to an integer. Novita's Sora 2 schema
+    // strictly requires `integer` (enum: 4/8/12), but RouterBase's api
+    // surface ships `duration` as a string for parity with the Veo
+    // variants — a 400 from Novita is the user-visible failure mode.
     if matches!(
         shape,
         NovitaRequestShape::Sora2TextToVideo
@@ -328,6 +333,12 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             NovitaRequestShape::Sora2ProTextToVideo | NovitaRequestShape::Sora2ProImageToVideo
         );
         body.insert("professional".into(), Value::Bool(pro));
+
+        if let Some(duration_str) = body.get("duration").and_then(Value::as_str) {
+            if let Ok(duration_int) = duration_str.parse::<i64>() {
+                body.insert("duration".into(), Value::from(duration_int));
+            }
+        }
     }
 
     if matches!(shape, NovitaRequestShape::GptImageEdit) && !body.contains_key("image") {
