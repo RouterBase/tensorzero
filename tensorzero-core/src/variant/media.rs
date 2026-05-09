@@ -252,9 +252,8 @@ fn extract_prompt_text(input: &LazyResolvedInput) -> Result<String, Error> {
         })
         .ok_or_else(|| {
             ErrorDetails::InvalidRequest {
-                message:
-                    "media variant requires at least one user text message as the prompt"
-                        .to_string(),
+                message: "media variant requires at least one user text message as the prompt"
+                    .to_string(),
             }
             .into()
         })

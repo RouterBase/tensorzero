@@ -1261,8 +1261,7 @@ fn check_convert_variant_to_llm_judge_variant(
             ))
         }
         VariantConfig::Media(_) => Err(ErrorDetails::Config {
-            message:
-                "Media variants cannot be used as LLM judge variants".to_string(),
+            message: "Media variants cannot be used as LLM judge variants".to_string(),
         }
         .into()),
     }

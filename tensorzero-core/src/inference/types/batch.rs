@@ -362,7 +362,10 @@ impl TryFrom<BatchInferenceParamsWithSize> for Vec<InferenceParams> {
             BatchChatCompletionParamsWithSize(chat_completion, num_inferences).try_into()?;
         Ok(chat_completion_params
             .into_iter()
-            .map(|p| InferenceParams { chat_completion: p, media_generation: Default::default() })
+            .map(|p| InferenceParams {
+                chat_completion: p,
+                media_generation: Default::default(),
+            })
             .collect())
     }
 }
