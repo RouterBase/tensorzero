@@ -341,6 +341,44 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
         }
     }
 
+    // Sora 2 image-to-video: Novita's body field is `image` (single string,
+    // URL or Base64). RouterBase's playground sends `image_urls` as an array
+    // for parity with Veo's i2v form. Translate the first element through.
+    if matches!(
+        shape,
+        NovitaRequestShape::Sora2ImageToVideo | NovitaRequestShape::Sora2ProImageToVideo
+    ) && !body.contains_key("image")
+    {
+        if let Some(value) = input.get("image").and_then(Value::as_str) {
+            body.insert("image".into(), Value::from(value));
+        } else if let Some(first) = input
+            .get("image_urls")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_str)
+        {
+            body.insert("image".into(), Value::from(first));
+        }
+    }
+
+    // Sora 2 Pro text-to-video: Novita's body field is `size` (e.g.
+    // `720*1280`, `1024*1792`). The playground / parameter_schema exposes
+    // a simpler `resolution` enum (720p / 1080p) for symmetry with Pro
+    // i2v's native `resolution` field. Translate to a Pro-supported `size`,
+    // defaulting to portrait orientation (1280h / 1792h) which is the
+    // Novita default and the most common Sora 2 use-case.
+    if matches!(shape, NovitaRequestShape::Sora2ProTextToVideo) && !body.contains_key("size") {
+        let res = input.get("resolution").and_then(Value::as_str);
+        let size = match res {
+            Some("1080p") => Some("1024*1792"),
+            Some("720p") => Some("720*1280"),
+            _ => None,
+        };
+        if let Some(s) = size {
+            body.insert("size".into(), Value::from(s));
+        }
+    }
+
     if matches!(shape, NovitaRequestShape::GptImageEdit) && !body.contains_key("image") {
         if let Some(first) = input
             .get("image_urls")
