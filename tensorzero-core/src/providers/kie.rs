@@ -160,7 +160,7 @@ impl InferenceProvider for KIEProvider {
             .parse::<Url>()
             .map_err(|e| {
                 Error::new(ErrorDetails::InvalidBaseUrl {
-                    message: format!("Failed to construct KIE chat URL: {e}"),
+                    message: format!("Failed to construct Provider chat URL: {e}"),
                 })
             })?;
 
@@ -266,7 +266,7 @@ impl InferenceProvider for KIEProvider {
                 .map_err(|e| {
                     Error::new(ErrorDetails::Serialization {
                         message: format!(
-                            "Error serializing KIE request: {}",
+                            "Error serializing Provider request: {}",
                             DisplayOrDebugGateway::new(e)
                         ),
                     })
@@ -278,7 +278,7 @@ impl InferenceProvider for KIEProvider {
             .parse::<Url>()
             .map_err(|e| {
                 Error::new(ErrorDetails::InvalidBaseUrl {
-                    message: format!("Failed to construct KIE chat URL: {e}"),
+                    message: format!("Failed to construct Provider chat URL: {e}"),
                 })
             })?;
 
@@ -893,7 +893,10 @@ impl KIEProvider {
 
         let response = http_client
             .post(url)
-            .header("Authorization", format!("Bearer {}", api_key.expose_secret()))
+            .header(
+                "Authorization",
+                format!("Bearer {}", api_key.expose_secret()),
+            )
             .header("Content-Type", "application/json")
             .body(raw_body)
             .send()
@@ -948,7 +951,6 @@ impl KIEProvider {
             }
         }
     }
-
 }
 
 #[cfg(test)]
@@ -978,7 +980,7 @@ mod tests {
 
         let kie_request = KIERequest::new("gemini-3-pro", &request_with_tools)
             .await
-            .expect("failed to create KIE Request during test");
+            .expect("failed to create Provider Request during test");
 
         assert_eq!(
             kie_request.temperature,
@@ -999,10 +1001,9 @@ mod tests {
         // Test that URLs are constructed correctly with model name
         let model_name = "gemini-3-pro";
         let expected_url = format!("{}/{}/v1/chat/completions", *KIE_API_BASE, model_name);
-        
+
         assert_eq!(
-            expected_url,
-            "https://api.kie.ai/gemini-3-pro/v1/chat/completions",
+            expected_url, "https://api.kie.ai/gemini-3-pro/v1/chat/completions",
             "Expected URL to include model name in correct format"
         );
     }
@@ -1030,7 +1031,7 @@ mod tests {
 
         // Test with "medium" reasoning_effort (should be mapped to "high")
         request.inference_params_v2.reasoning_effort = Some("medium".to_string());
-        
+
         let mut kie_request = KIERequest {
             model: "kie-chat",
             messages: vec![],
@@ -1051,7 +1052,7 @@ mod tests {
         };
 
         apply_inference_params(&mut kie_request, &request.inference_params_v2);
-        
+
         assert_eq!(
             kie_request.reasoning_effort,
             Some("high".to_string()),
@@ -1060,7 +1061,7 @@ mod tests {
 
         // Test with "low" reasoning_effort (should remain "low")
         request.inference_params_v2.reasoning_effort = Some("low".to_string());
-        
+
         let mut kie_request_low = KIERequest {
             model: "kie-chat",
             messages: vec![],
@@ -1081,7 +1082,7 @@ mod tests {
         };
 
         apply_inference_params(&mut kie_request_low, &request.inference_params_v2);
-        
+
         assert_eq!(
             kie_request_low.reasoning_effort,
             Some("low".to_string()),
@@ -1090,7 +1091,7 @@ mod tests {
 
         // Test with "high" reasoning_effort (should remain "high")
         request.inference_params_v2.reasoning_effort = Some("high".to_string());
-        
+
         let mut kie_request_high = KIERequest {
             model: "kie-chat",
             messages: vec![],
@@ -1111,7 +1112,7 @@ mod tests {
         };
 
         apply_inference_params(&mut kie_request_high, &request.inference_params_v2);
-        
+
         assert_eq!(
             kie_request_high.reasoning_effort,
             Some("high".to_string()),

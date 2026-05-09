@@ -58,7 +58,7 @@ impl NovitaProvider {
     ) -> Result<String, Error> {
         let callback_url = callback_url.ok_or_else(|| {
             Error::new(ErrorDetails::InvalidRequest {
-                message: "kie_media proxy requires a callback_url".to_string(),
+                message: "media proxy requires a callback_url".to_string(),
             })
         })?;
         let api_key = get_api_key(dynamic_api_keys)?;
@@ -165,7 +165,7 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
         .filter(|prompt| !prompt.is_empty())
         .ok_or_else(|| {
             Error::new(ErrorDetails::InvalidRequest {
-                message: "Novita-backed kie_media variants require a prompt".to_string(),
+                message: "Novita-backed media variants require a prompt".to_string(),
             })
         })?;
 
