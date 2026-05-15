@@ -76,6 +76,36 @@ pub enum NovitaRequestShape {
     /// prompt, negative_prompt, model_name (std/pro tier),
     /// keep_original_sound, character_orientation.
     KlingV3MotionControl,
+    /// Wan 2.7 text-to-video. Per `/v3/async/wan2.7-t2v`: prompt
+    /// (auto), duration (int 2–15), size (e.g. "1920*1080"), seed,
+    /// audio_url (optional), negative_prompt (≤500), watermark,
+    /// prompt_extend.
+    #[serde(rename = "wan_2_7_text_to_video")]
+    Wan27TextToVideo,
+    /// Wan 2.7 image-to-video. Per `/v3/async/wan2.7-i2v`: prompt
+    /// (auto, optional), image_url (remapped from image_urls[0]),
+    /// duration (int 2–15), resolution (720P|1080P), seed,
+    /// negative_prompt, watermark, prompt_extend, driving_audio_url,
+    /// last_frame_url. `first_clip_url` (video continuation) is not
+    /// surfaced — would need a separate variant if exposed.
+    #[serde(rename = "wan_2_7_image_to_video")]
+    Wan27ImageToVideo,
+    /// Wan 2.7 reference-to-video. Per `/v3/async/wan2.7-r2v`: prompt
+    /// (auto), media (array of 1–5 image/video reference URLs),
+    /// duration (int 2–10), size, seed, audio (bool, default true),
+    /// shot_type (single|multi), watermark, negative_prompt.
+    /// Media array is built from `image_urls` + `video_urls` below.
+    #[serde(rename = "wan_2_7_reference_to_video")]
+    Wan27ReferenceToVideo,
+    /// Wan 2.7 video editing. Per `/v3/async/wan2.7-videoedit`:
+    /// video_url (required, remapped from video_urls[0]), prompt
+    /// (auto, optional), duration (int 0–10, 0 preserves input),
+    /// ratio (16:9|9:16|1:1|4:3|3:4), resolution (720P|1080P),
+    /// audio_setting (auto|origin), seed, watermark, prompt_extend,
+    /// negative_prompt, reference_image_url(_2,_3) (up to 3,
+    /// remapped from image_urls[0..3]).
+    #[serde(rename = "wan_2_7_video_edit")]
+    Wan27VideoEdit,
 }
 
 impl NovitaProvider {
@@ -322,6 +352,66 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "keep_original_sound",
             "character_orientation",
         ],
+        // Wan 2.7 text-to-video. Per `/v3/async/wan2.7-t2v`: prompt
+        // (auto), duration (int 2–15), size, seed, audio_url,
+        // negative_prompt (≤500), watermark, prompt_extend.
+        NovitaRequestShape::Wan27TextToVideo => &[
+            "duration",
+            "size",
+            "seed",
+            "audio_url",
+            "negative_prompt",
+            "watermark",
+            "prompt_extend",
+        ],
+        // Wan 2.7 image-to-video. Per `/v3/async/wan2.7-i2v`: prompt
+        // (auto, optional), image_url (remapped from
+        // `image_urls[0]`), duration, resolution (720P|1080P), seed,
+        // negative_prompt, watermark, prompt_extend,
+        // driving_audio_url, last_frame_url. `first_clip_url` (video
+        // continuation) is not surfaced; if exposed, give it its own
+        // variant since it's mutually exclusive with image_url.
+        NovitaRequestShape::Wan27ImageToVideo => &[
+            "duration",
+            "resolution",
+            "seed",
+            "negative_prompt",
+            "watermark",
+            "prompt_extend",
+            "driving_audio_url",
+            "last_frame_url",
+        ],
+        // Wan 2.7 reference-to-video. Per `/v3/async/wan2.7-r2v`:
+        // prompt (auto), media (array of refs, built from
+        // image_urls + video_urls below), duration (int 2–10), size,
+        // seed, audio (bool), shot_type (single|multi), watermark,
+        // negative_prompt.
+        NovitaRequestShape::Wan27ReferenceToVideo => &[
+            "duration",
+            "size",
+            "seed",
+            "audio",
+            "shot_type",
+            "watermark",
+            "negative_prompt",
+        ],
+        // Wan 2.7 video editing. Per `/v3/async/wan2.7-videoedit`:
+        // video_url (remapped from `video_urls[0]`), prompt (auto,
+        // optional), duration (int 0–10, 0 = preserve input
+        // length), ratio (5 enum), resolution (720P|1080P),
+        // audio_setting (auto|origin), seed, watermark,
+        // prompt_extend, negative_prompt, reference_image_url(_2,_3)
+        // (up to 3, remapped from image_urls[0..3] below).
+        NovitaRequestShape::Wan27VideoEdit => &[
+            "duration",
+            "ratio",
+            "resolution",
+            "audio_setting",
+            "seed",
+            "watermark",
+            "prompt_extend",
+            "negative_prompt",
+        ],
     };
 
     if let Some(input_obj) = input.as_object() {
@@ -492,6 +582,98 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
     // as Sora 2 / Veo T2V — the playground sends it as a top-level
     // field, not in a messages array.
     if matches!(shape, NovitaRequestShape::KlingV34kTextToVideo) && !body.contains_key("prompt") {
+        if let Some(value) = input.get("prompt").and_then(Value::as_str) {
+            body.insert("prompt".into(), Value::from(value));
+        }
+    }
+
+    // Wan 2.7 I2V: body wants `image_url` (single string). Playground
+    // sends `image_urls` array for parity with Veo/Sora/Kling i2v.
+    if matches!(shape, NovitaRequestShape::Wan27ImageToVideo) && !body.contains_key("image_url") {
+        if let Some(value) = input.get("image_url").and_then(Value::as_str) {
+            body.insert("image_url".into(), Value::from(value));
+        } else if let Some(first) = input
+            .get("image_urls")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_str)
+        {
+            body.insert("image_url".into(), Value::from(first));
+        }
+    }
+
+    // Wan 2.7 Video Editing: body wants `video_url` (single string,
+    // required). Playground sends `video_urls` array.
+    if matches!(shape, NovitaRequestShape::Wan27VideoEdit) && !body.contains_key("video_url") {
+        if let Some(value) = input.get("video_url").and_then(Value::as_str) {
+            body.insert("video_url".into(), Value::from(value));
+        } else if let Some(first) = input
+            .get("video_urls")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_str)
+        {
+            body.insert("video_url".into(), Value::from(first));
+        }
+    }
+
+    // Wan 2.7 Video Editing: up to 3 reference images, body wants
+    // `reference_image_url`, `reference_image_url_2`,
+    // `reference_image_url_3` (each a single string). Playground
+    // ships `image_urls` as a flat array — split into the three
+    // Wan-specific fields. Only forwarded when the caller didn't
+    // already set them explicitly.
+    if matches!(shape, NovitaRequestShape::Wan27VideoEdit) {
+        if let Some(imgs) = input.get("image_urls").and_then(Value::as_array) {
+            let slot_names = ["reference_image_url", "reference_image_url_2", "reference_image_url_3"];
+            for (idx, slot) in slot_names.iter().enumerate() {
+                if body.contains_key(*slot) {
+                    continue;
+                }
+                if let Some(url) = imgs.get(idx).and_then(Value::as_str) {
+                    body.insert((*slot).to_string(), Value::from(url));
+                }
+            }
+        }
+    }
+
+    // Wan 2.7 R2V: body wants `media` — an array of objects with a
+    // `type` ("image"|"video") + `url`. Playground sends
+    // `image_urls` and `video_urls` as separate arrays. Build the
+    // unified list; total capped at 5 by Novita (images ≤5,
+    // videos ≤3 — we don't enforce here, let upstream return its
+    // own error since `parameter_schema` already gates the inputs).
+    if matches!(shape, NovitaRequestShape::Wan27ReferenceToVideo) && !body.contains_key("media") {
+        let mut media: Vec<Value> = Vec::new();
+        if let Some(imgs) = input.get("image_urls").and_then(Value::as_array) {
+            for u in imgs.iter().filter_map(Value::as_str) {
+                media.push(json!({ "type": "image", "url": u }));
+            }
+        }
+        if let Some(vids) = input.get("video_urls").and_then(Value::as_array) {
+            for u in vids.iter().filter_map(Value::as_str) {
+                media.push(json!({ "type": "video", "url": u }));
+            }
+        }
+        if !media.is_empty() {
+            body.insert("media".into(), Value::Array(media));
+        }
+    }
+
+    // Wan 2.7 T2V/I2V/R2V/Video Edit all accept `prompt` as a body
+    // field. The shape-specific arms above explicitly *omit* "prompt"
+    // from `allowed` because it's already inserted at the top of
+    // build_body (line ~184). This block is a no-op for them, but
+    // kept as a safety net mirroring the Kling pattern in case the
+    // upstream caller paths change.
+    if matches!(
+        shape,
+        NovitaRequestShape::Wan27TextToVideo
+            | NovitaRequestShape::Wan27ImageToVideo
+            | NovitaRequestShape::Wan27ReferenceToVideo
+            | NovitaRequestShape::Wan27VideoEdit
+    ) && !body.contains_key("prompt")
+    {
         if let Some(value) = input.get("prompt").and_then(Value::as_str) {
             body.insert("prompt".into(), Value::from(value));
         }
