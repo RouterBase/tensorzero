@@ -57,6 +57,25 @@ pub enum NovitaRequestShape {
     Sora2ImageToVideo,
     /// OpenAI Sora 2, image-to-video (Pro).
     Sora2ProImageToVideo,
+    /// Kling v3.0 4K, text-to-video. Per Novita's
+    /// `/v3/async/kling-v3.0-4k-t2v` doc: prompt (auto),
+    /// negative_prompt, aspect_ratio, duration (int 3–15),
+    /// cfg_scale (0–1), sound.
+    #[serde(rename = "kling_v3_4k_text_to_video")]
+    KlingV34kTextToVideo,
+    /// Kling v3.0 4K, image-to-video. Per
+    /// `/v3/async/kling-v3.0-4k-i2v`: image (URL), prompt,
+    /// negative_prompt, end_image, duration, cfg_scale, sound.
+    /// `multi_prompt` is not surfaced — incompatible with end_image
+    /// and would need a separate request_shape if/when we expose it.
+    #[serde(rename = "kling_v3_4k_image_to_video")]
+    KlingV34kImageToVideo,
+    /// Kling v3.0 Motion Control. Image + reference video; the
+    /// reference video's motion is transferred onto the still image.
+    /// Per `/v3/async/kling-v3.0-motion-control`: image, video,
+    /// prompt, negative_prompt, model_name (std/pro tier),
+    /// keep_original_sound, character_orientation.
+    KlingV3MotionControl,
 }
 
 impl NovitaProvider {
@@ -265,6 +284,44 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
         NovitaRequestShape::Sora2ImageToVideo | NovitaRequestShape::Sora2ProImageToVideo => {
             &["image", "resolution", "duration"]
         }
+        // Kling v3.0 4K, text-to-video. Per
+        // `/v3/async/kling-v3.0-4k-t2v`: prompt (auto), enum
+        // aspect_ratio, integer duration (3–15), float cfg_scale
+        // (0–1), bool sound, optional negative_prompt.
+        NovitaRequestShape::KlingV34kTextToVideo => &[
+            "negative_prompt",
+            "aspect_ratio",
+            "duration",
+            "cfg_scale",
+            "sound",
+        ],
+        // Kling v3.0 4K, image-to-video. Per
+        // `/v3/async/kling-v3.0-4k-i2v`: prompt (auto), image (URL,
+        // remapped from `image_urls[0]` below), duration, cfg_scale,
+        // sound, negative_prompt, end_image. Multi-shot composition
+        // is exposed via Novita's `multi_prompt` array — not
+        // surfaced here because it's mutually exclusive with
+        // `end_image` and we'd want a separate variant if/when we
+        // ship it.
+        NovitaRequestShape::KlingV34kImageToVideo => &[
+            "negative_prompt",
+            "duration",
+            "cfg_scale",
+            "sound",
+            "end_image",
+        ],
+        // Kling v3.0 Motion Control. Per
+        // `/v3/async/kling-v3.0-motion-control`: image (remapped
+        // from `image_urls[0]`), video (remapped from
+        // `video_urls[0]`), prompt (auto, optional),
+        // negative_prompt, model_name (std/pro tier),
+        // keep_original_sound, character_orientation (image|video).
+        NovitaRequestShape::KlingV3MotionControl => &[
+            "negative_prompt",
+            "model_name",
+            "keep_original_sound",
+            "character_orientation",
+        ],
     };
 
     if let Some(input_obj) = input.as_object() {
@@ -386,6 +443,57 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             .and_then(|arr| arr.first())
         {
             body.insert("image".into(), first.clone());
+        }
+    }
+
+    // Kling v3.0 4K I2V + Motion Control: Novita body fields are `image`
+    // (single string URL) and, for Motion Control, `video` (single URL).
+    // The playground / parameter_schema exposes `image_urls` / `video_urls`
+    // as arrays for parity with Veo + Sora i2v. Pluck the first element
+    // through. Also forwards the user's `prompt` since these endpoints
+    // accept it as a body field (not auto-injected via the messages array).
+    if matches!(
+        shape,
+        NovitaRequestShape::KlingV34kImageToVideo | NovitaRequestShape::KlingV3MotionControl
+    ) {
+        if !body.contains_key("image") {
+            if let Some(value) = input.get("image").and_then(Value::as_str) {
+                body.insert("image".into(), Value::from(value));
+            } else if let Some(first) = input
+                .get("image_urls")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(Value::as_str)
+            {
+                body.insert("image".into(), Value::from(first));
+            }
+        }
+        if !body.contains_key("prompt") {
+            if let Some(value) = input.get("prompt").and_then(Value::as_str) {
+                body.insert("prompt".into(), Value::from(value));
+            }
+        }
+    }
+
+    if matches!(shape, NovitaRequestShape::KlingV3MotionControl) && !body.contains_key("video") {
+        if let Some(value) = input.get("video").and_then(Value::as_str) {
+            body.insert("video".into(), Value::from(value));
+        } else if let Some(first) = input
+            .get("video_urls")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_str)
+        {
+            body.insert("video".into(), Value::from(first));
+        }
+    }
+
+    // Kling v3.0 4K T2V: forward `prompt` from the input. Same handling
+    // as Sora 2 / Veo T2V — the playground sends it as a top-level
+    // field, not in a messages array.
+    if matches!(shape, NovitaRequestShape::KlingV34kTextToVideo) && !body.contains_key("prompt") {
+        if let Some(value) = input.get("prompt").and_then(Value::as_str) {
+            body.insert("prompt".into(), Value::from(value));
         }
     }
 
