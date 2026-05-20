@@ -394,6 +394,7 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "shot_type",
             "watermark",
             "negative_prompt",
+            "media",
         ],
         // Wan 2.7 video editing. Per `/v3/async/wan2.7-videoedit`:
         // video_url (remapped from `video_urls[0]`), prompt (auto,
@@ -638,24 +639,38 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
     }
 
     // Wan 2.7 R2V: body wants `media` — an array of objects with a
-    // `type` ("image"|"video") + `url`. Playground sends
-    // `image_urls` and `video_urls` as separate arrays. Build the
-    // unified list; total capped at 5 by Novita (images ≤5,
-    // videos ≤3 — we don't enforce here, let upstream return its
-    // own error since `parameter_schema` already gates the inputs).
+    // `type` (`reference_image`|`reference_video`|`first_frame`) +
+    // `url`, plus optional per-item `reference_voice` (voice-clone
+    // audio, MP3/WAV/FLAC, 3–30s).
+    //
+    // Two input shapes are supported:
+    //   (a) Playground/legacy flat shape: `image_urls` + `video_urls`
+    //       arrays. Each entry becomes a `reference_image` /
+    //       `reference_video` media item. No way to express
+    //       `first_frame` or `reference_voice` in this shape.
+    //   (b) New rich shape: caller passes a `media` array of objects
+    //       directly. Used by the SPA's media-editor UI and any
+    //       direct API caller. We pass it through verbatim, just
+    //       capping at Novita's 5-item ceiling.
+    //
+    // Novita enforces (total ≤ 5; images 0–5; videos 0–3) on its end,
+    // so we don't double-validate beyond the 5-cap.
     if matches!(shape, NovitaRequestShape::Wan27ReferenceToVideo) && !body.contains_key("media") {
         let mut media: Vec<Value> = Vec::new();
         if let Some(imgs) = input.get("image_urls").and_then(Value::as_array) {
             for u in imgs.iter().filter_map(Value::as_str) {
-                media.push(json!({ "type": "image", "url": u }));
+                media.push(json!({ "type": "reference_image", "url": u }));
             }
         }
         if let Some(vids) = input.get("video_urls").and_then(Value::as_array) {
             for u in vids.iter().filter_map(Value::as_str) {
-                media.push(json!({ "type": "video", "url": u }));
+                media.push(json!({ "type": "reference_video", "url": u }));
             }
         }
         if !media.is_empty() {
+            if media.len() > 5 {
+                media.truncate(5);
+            }
             body.insert("media".into(), Value::Array(media));
         }
     }
