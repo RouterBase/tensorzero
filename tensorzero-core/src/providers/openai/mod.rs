@@ -2555,10 +2555,18 @@ impl<'a> OpenAIBatchRequest<'a> {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub(super) struct OpenAIPromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub(super) struct OpenAIUsage {
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
+    #[serde(default)]
+    pub prompt_tokens_details: Option<OpenAIPromptTokensDetails>,
 }
 
 impl From<OpenAIUsage> for Usage {
@@ -2566,6 +2574,7 @@ impl From<OpenAIUsage> for Usage {
         Usage {
             input_tokens: usage.prompt_tokens,
             output_tokens: usage.completion_tokens,
+            cached_tokens: usage.prompt_tokens_details.and_then(|d| d.cached_tokens),
         }
     }
 }
@@ -2589,6 +2598,7 @@ impl From<OpenAIEmbeddingUsage> for Usage {
         Usage {
             input_tokens: usage.prompt_tokens,
             output_tokens: Some(0), // this is always zero for embeddings
+            cached_tokens: None,
         }
     }
 }
@@ -3657,6 +3667,7 @@ mod tests {
             usage: Some(OpenAIUsage {
                 prompt_tokens: Some(10),
                 completion_tokens: Some(20),
+                prompt_tokens_details: None,
             }),
         };
         let generic_request = ModelInferenceRequest {
@@ -3750,6 +3761,7 @@ mod tests {
             usage: Some(OpenAIUsage {
                 prompt_tokens: Some(15),
                 completion_tokens: Some(25),
+                prompt_tokens_details: None,
             }),
         };
         let generic_request = ModelInferenceRequest {
@@ -3835,6 +3847,7 @@ mod tests {
             usage: Some(OpenAIUsage {
                 prompt_tokens: Some(5),
                 completion_tokens: Some(0),
+                prompt_tokens_details: None,
             }),
         };
         let request_body = OpenAIRequest {
@@ -3889,6 +3902,7 @@ mod tests {
             usage: Some(OpenAIUsage {
                 prompt_tokens: Some(10),
                 completion_tokens: Some(10),
+                prompt_tokens_details: None,
             }),
         };
 
@@ -4249,6 +4263,7 @@ mod tests {
         let usage = OpenAIUsage {
             prompt_tokens: Some(10),
             completion_tokens: Some(20),
+            prompt_tokens_details: None,
         };
         let chunk = OpenAIChatChunk {
             choices: vec![],
@@ -4300,6 +4315,7 @@ mod tests {
             Some(Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(20),
+                cached_tokens: None,
             }),
             "expected usage to include provider raw_usage entries"
         );
@@ -5773,6 +5789,7 @@ mod tests {
         let openai_usage = Some(OpenAIUsage {
             prompt_tokens: Some(10),
             completion_tokens: Some(20),
+            prompt_tokens_details: None,
         });
         let usage: Usage = openai_usage.into();
         assert_eq!(usage.input_tokens, Some(10), "input_tokens should be 10");

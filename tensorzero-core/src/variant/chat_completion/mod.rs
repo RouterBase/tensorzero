@@ -1725,6 +1725,7 @@ mod tests {
             Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(1),
+                cached_tokens: None,
             }
         );
         match result {
@@ -1809,6 +1810,7 @@ mod tests {
             Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(1),
+                cached_tokens: None,
             }
         );
         match result {
@@ -1906,6 +1908,7 @@ mod tests {
             Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(1),
+                cached_tokens: None,
             }
         );
         match result {
@@ -2010,6 +2013,7 @@ mod tests {
             Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(1),
+                cached_tokens: None,
             }
         );
         match result {
@@ -2142,6 +2146,7 @@ mod tests {
             Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(1),
+                cached_tokens: None,
             }
         );
         match result {
@@ -2267,6 +2272,7 @@ mod tests {
             Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(1),
+                cached_tokens: None,
             }
         );
         match result {
@@ -2597,6 +2603,7 @@ mod tests {
                     Some(&Usage {
                         input_tokens: Some(10),
                         output_tokens: Some(16),
+                        cached_tokens: None,
                     })
                 );
                 break;

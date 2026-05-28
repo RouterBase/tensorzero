@@ -1349,6 +1349,7 @@ mod tests {
             Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(1),
+                cached_tokens: None,
             }
         );
         match inference_result {
@@ -1461,6 +1462,7 @@ mod tests {
             Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(1),
+                cached_tokens: None,
             }
         );
         match inference_result {
@@ -1679,6 +1681,7 @@ mod tests {
             Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(1),
+                cached_tokens: None,
             }
         );
         match inference_result {

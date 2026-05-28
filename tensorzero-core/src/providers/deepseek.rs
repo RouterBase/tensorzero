@@ -1064,6 +1064,7 @@ mod tests {
             usage: OpenAIUsage {
                 prompt_tokens: Some(10),
                 completion_tokens: Some(20),
+                prompt_tokens_details: None,
             },
         };
         let generic_request = ModelInferenceRequest {

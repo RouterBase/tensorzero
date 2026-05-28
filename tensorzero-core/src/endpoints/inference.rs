@@ -1720,6 +1720,7 @@ impl InferenceResponseChunk {
             inference_result.usage().map(|_| Usage {
                 input_tokens: Some(0),
                 output_tokens: Some(0),
+                cached_tokens: None,
             })
         } else {
             inference_result.usage().copied()
@@ -2627,6 +2628,7 @@ mod tests {
             usage: Some(Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(20),
+                cached_tokens: None,
             }),
             raw_usage: Some(raw_usage_entries.clone()),
             raw_response: None,
@@ -2678,6 +2680,7 @@ mod tests {
             usage: Some(Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(20),
+                cached_tokens: None,
             }),
             raw_usage: Some(raw_usage_entries),
             raw_response: None,
@@ -2713,6 +2716,7 @@ mod tests {
             usage: Some(Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(20),
+                cached_tokens: None,
             }),
             raw_usage: None,
             raw_response: None,
@@ -2745,6 +2749,7 @@ mod tests {
             usage: Some(Usage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
+                cached_tokens: None,
             }),
             raw_usage: None,
             raw_response: None,
@@ -2791,6 +2796,7 @@ mod tests {
             usage: Some(Usage {
                 input_tokens: Some(30),
                 output_tokens: Some(20),
+                cached_tokens: None,
             }),
             raw_usage: Some(raw_usage_entries),
             raw_response: None,
@@ -2878,6 +2884,7 @@ mod tests {
             usage: Usage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
+                cached_tokens: None,
             },
             latency: Latency::NonStreaming {
                 response_time: Duration::from_millis(100),
@@ -2976,6 +2983,7 @@ mod tests {
             usage: Usage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
+                cached_tokens: None,
             },
             latency: Latency::NonStreaming {
                 response_time: Duration::from_millis(100),
@@ -3056,6 +3064,7 @@ mod tests {
             usage: Usage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
+                cached_tokens: None,
             },
             latency: Latency::NonStreaming {
                 response_time: Duration::from_millis(100),
