@@ -623,9 +623,13 @@ pub async fn run_server(args: Args, server_started: oneshot::Sender<SocketAddr>)
     let shutdown_for_health = shutdown_tx.clone();
     #[expect(clippy::disallowed_methods)]
     tokio::spawn(async move {
-        if let Err(e) = run_health_server(health_port,task_tracker_for_health,
+        if let Err(e) = run_health_server(
+            health_port,
+            task_tracker_for_health,
             shutdown_for_health.subscribe(),
-        ).await {
+        )
+        .await
+        {
             tracing::error!("Health check server failed: {:?}", e);
         }
     });

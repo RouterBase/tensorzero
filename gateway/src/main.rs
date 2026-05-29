@@ -1,6 +1,8 @@
 #![recursion_limit = "256"]
 
+use autopilot_worker::{AutopilotWorkerConfig, AutopilotWorkerHandle, spawn_autopilot_worker};
 use clap::Parser;
+use durable_tools::{EmbeddedClient, WorkerOptions};
 use futures::{FutureExt, StreamExt};
 use mimalloc::MiMalloc;
 use secrecy::ExposeSecret;
@@ -10,11 +12,6 @@ use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::time::Duration;
-use tensorzero_core::observability::request_logging::InFlightRequestsData;
-use tensorzero_signals::shutdown_signal;
-use tokio_stream::wrappers::IntervalStream;
-use autopilot_worker::{AutopilotWorkerConfig, AutopilotWorkerHandle, spawn_autopilot_worker};
-use durable_tools::{EmbeddedClient, WorkerOptions};
 use tensorzero_auth::constants::{DEFAULT_ORGANIZATION, DEFAULT_WORKSPACE};
 use tensorzero_core::config::{Config, ConfigFileGlob};
 use tensorzero_core::db::clickhouse::migration_manager::manual_run_clickhouse_migrations;
@@ -23,7 +20,10 @@ use tensorzero_core::db::valkey::ValkeyConnectionInfo;
 use tensorzero_core::endpoints::status::TENSORZERO_VERSION;
 use tensorzero_core::error;
 use tensorzero_core::observability;
+use tensorzero_core::observability::request_logging::InFlightRequestsData;
 use tensorzero_core::utils::gateway;
+use tensorzero_signals::shutdown_signal;
+use tokio_stream::wrappers::IntervalStream;
 
 mod cli;
 mod router;

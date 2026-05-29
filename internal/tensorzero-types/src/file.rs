@@ -415,7 +415,9 @@ where
     let value = serde_json::Value::deserialize(deserializer)?;
     match value {
         serde_json::Value::String(s) => s.parse().map_err(Error::custom),
-        other => Err(Error::custom(format!("Expected string for MIME type, got: {other}"))),
+        other => Err(Error::custom(format!(
+            "Expected string for MIME type, got: {other}"
+        ))),
     }
 }
 
@@ -428,7 +430,9 @@ where
     match Option::<serde_json::Value>::deserialize(deserializer)? {
         None => Ok(None),
         Some(serde_json::Value::String(s)) => s.parse().map(Some).map_err(Error::custom),
-        Some(other) => Err(Error::custom(format!("Expected string for MIME type, got: {other}"))),
+        Some(other) => Err(Error::custom(format!(
+            "Expected string for MIME type, got: {other}"
+        ))),
     }
 }
 
