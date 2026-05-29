@@ -423,6 +423,7 @@ impl EmbeddingModelResponse {
             usage: Usage {
                 input_tokens: cache_lookup.input_tokens,
                 output_tokens: cache_lookup.output_tokens,
+                cached_tokens: None,
             },
             latency: Latency::NonStreaming {
                 response_time: Duration::from_secs(0),
@@ -442,6 +443,7 @@ impl EmbeddingModelResponse {
             Usage {
                 input_tokens: Some(0),
                 output_tokens: Some(0),
+                cached_tokens: None,
             }
         } else {
             self.usage

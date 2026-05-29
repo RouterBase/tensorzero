@@ -196,6 +196,7 @@ impl TensorzeroRelay {
                             (Some(total), Some(prompt)) => Some(total - prompt),
                             _ => None,
                         },
+                        cached_tokens: None,
                     })
                     .unwrap_or_default(),
                 model,

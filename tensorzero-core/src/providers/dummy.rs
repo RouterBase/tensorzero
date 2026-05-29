@@ -85,22 +85,27 @@ impl DummyProvider {
             "input_tokens_zero" => Usage {
                 input_tokens: Some(0),
                 output_tokens: Some(output_tokens),
+                cached_tokens: None,
             },
             "output_tokens_zero" => Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(0),
+                cached_tokens: None,
             },
             "input_tokens_output_tokens_zero" => Usage {
                 input_tokens: Some(0),
                 output_tokens: Some(0),
+                cached_tokens: None,
             },
             "input_five_output_six" => Usage {
                 input_tokens: Some(5),
                 output_tokens: Some(6),
+                cached_tokens: None,
             },
             _ => Usage {
                 input_tokens: Some(10),
                 output_tokens: Some(output_tokens),
+                cached_tokens: None,
             },
         }
     }
@@ -933,6 +938,7 @@ impl EmbeddingProvider for DummyProvider {
         let usage = Usage {
             input_tokens: Some(10),
             output_tokens: Some(0),
+            cached_tokens: None,
         };
         let latency = Latency::NonStreaming {
             response_time: Duration::from_millis(100),

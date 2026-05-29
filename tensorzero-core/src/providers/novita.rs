@@ -626,7 +626,11 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
     // already set them explicitly.
     if matches!(shape, NovitaRequestShape::Wan27VideoEdit) {
         if let Some(imgs) = input.get("image_urls").and_then(Value::as_array) {
-            let slot_names = ["reference_image_url", "reference_image_url_2", "reference_image_url_3"];
+            let slot_names = [
+                "reference_image_url",
+                "reference_image_url_2",
+                "reference_image_url_3",
+            ];
             for (idx, slot) in slot_names.iter().enumerate() {
                 if body.contains_key(*slot) {
                     continue;

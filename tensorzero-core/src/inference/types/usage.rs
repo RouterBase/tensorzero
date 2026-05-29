@@ -58,6 +58,9 @@ pub struct RawResponseEntry {
 pub struct Usage {
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
+    #[cfg_attr(feature = "ts-bindings", ts(export, optional_fields))]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cached_tokens: Option<u32>,
 }
 
 impl Usage {
@@ -65,6 +68,7 @@ impl Usage {
         Usage {
             input_tokens: Some(0),
             output_tokens: Some(0),
+            cached_tokens: Some(0),
         }
     }
 
@@ -103,6 +107,7 @@ where
             let Usage {
                 input_tokens: chunk_input_tokens,
                 output_tokens: chunk_output_tokens,
+                cached_tokens: chunk_cached_tokens,
             } = chunk_usage;
 
             acc.input_tokens = match (acc.input_tokens, chunk_input_tokens) {
@@ -143,6 +148,18 @@ where
                 }
             };
 
+            acc.cached_tokens = match (acc.cached_tokens, chunk_cached_tokens) {
+                (_, None) => acc.cached_tokens,
+                (None, chunk_value) => chunk_value,
+                (Some(current_value), Some(chunk_value)) => {
+                    if current_value < chunk_value {
+                        Some(chunk_value)
+                    } else {
+                        Some(current_value)
+                    }
+                }
+            };
+
             acc
         })
 }
@@ -163,6 +180,7 @@ where
         let Usage {
             input_tokens: mi_input_tokens,
             output_tokens: mi_output_tokens,
+            cached_tokens: mi_cached_tokens,
         } = mi_usage;
 
         Usage {
@@ -173,6 +191,11 @@ where
             output_tokens: match (acc.output_tokens, mi_output_tokens) {
                 (Some(a), Some(b)) => Some(a + b),
                 _ => None,
+            },
+            // Sum `cached_tokens` treating `None` as 0; result is `None` only if both are `None`.
+            cached_tokens: match (acc.cached_tokens, mi_cached_tokens) {
+                (None, None) => None,
+                (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
             },
         }
     })
@@ -250,6 +273,7 @@ mod tests {
         let usage = Usage {
             input_tokens: Some(100),
             output_tokens: Some(50),
+            cached_tokens: None,
         };
         let result = aggregate_usage_from_single_streaming_model_inference(vec![usage]);
         assert_eq!(
@@ -271,14 +295,17 @@ mod tests {
             Usage {
                 input_tokens: Some(100),
                 output_tokens: Some(10),
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: Some(100),
                 output_tokens: Some(25),
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
+                cached_tokens: None,
             },
         ];
         let result = aggregate_usage_from_single_streaming_model_inference(chunks);
@@ -301,14 +328,17 @@ mod tests {
             Usage {
                 input_tokens: None,
                 output_tokens: None,
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: None,
                 output_tokens: None,
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: Some(200),
                 output_tokens: Some(100),
+                cached_tokens: None,
             },
         ];
         let result = aggregate_usage_from_single_streaming_model_inference(chunks);
@@ -330,10 +360,12 @@ mod tests {
             Usage {
                 input_tokens: None,
                 output_tokens: None,
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: None,
                 output_tokens: None,
+                cached_tokens: None,
             },
         ];
         let result = aggregate_usage_from_single_streaming_model_inference(chunks);
@@ -353,10 +385,12 @@ mod tests {
             Usage {
                 input_tokens: Some(100),
                 output_tokens: None,
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: None,
                 output_tokens: Some(50),
+                cached_tokens: None,
             },
         ];
         let result = aggregate_usage_from_single_streaming_model_inference(chunks);
@@ -381,10 +415,12 @@ mod tests {
             Usage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: Some(80),  // Smaller than previous (unexpected)
                 output_tokens: Some(30), // Smaller than previous (unexpected)
+                cached_tokens: None,
             },
         ];
         // This will panic due to debug_assert! when non-cumulative values are detected
@@ -413,6 +449,7 @@ mod tests {
         let usage = Usage {
             input_tokens: Some(100),
             output_tokens: Some(50),
+            cached_tokens: None,
         };
         let result = aggregate_usage_across_model_inferences(vec![usage]);
         assert_eq!(
@@ -433,10 +470,12 @@ mod tests {
             Usage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: Some(200),
                 output_tokens: Some(100),
+                cached_tokens: None,
             },
         ];
         let result = aggregate_usage_across_model_inferences(usages);
@@ -458,10 +497,12 @@ mod tests {
             Usage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: None, // This should propagate None for input_tokens
                 output_tokens: Some(100),
+                cached_tokens: None,
             },
         ];
         let result = aggregate_usage_across_model_inferences(usages);
@@ -482,10 +523,12 @@ mod tests {
             Usage {
                 input_tokens: None,
                 output_tokens: Some(50),
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: Some(100),
                 output_tokens: None,
+                cached_tokens: None,
             },
         ];
         let result = aggregate_usage_across_model_inferences(usages);
@@ -505,10 +548,12 @@ mod tests {
             Usage {
                 input_tokens: None,
                 output_tokens: None,
+                cached_tokens: None,
             },
             Usage {
                 input_tokens: None,
                 output_tokens: None,
+                cached_tokens: None,
             },
         ];
         let result = aggregate_usage_across_model_inferences(usages);
@@ -529,11 +574,13 @@ mod tests {
             Usage {
                 input_tokens: Some(69),
                 output_tokens: Some(1),
+                cached_tokens: None,
             },
             // message_delta chunk: only output_tokens, no input_tokens
             Usage {
                 input_tokens: None,
                 output_tokens: Some(100),
+                cached_tokens: None,
             },
         ];
 

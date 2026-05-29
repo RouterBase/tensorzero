@@ -1375,6 +1375,7 @@ impl ModelInferenceResponseWithMetadata {
             Usage {
                 input_tokens: Some(0),
                 output_tokens: Some(0),
+                cached_tokens: None,
             }
         } else {
             self.usage
@@ -1659,6 +1660,7 @@ impl ModelInferenceResponse {
             usage: Usage {
                 input_tokens: cache_lookup.input_tokens,
                 output_tokens: cache_lookup.output_tokens,
+                cached_tokens: None,
             },
             provider_latency: Latency::NonStreaming {
                 response_time: Duration::from_secs(0),
@@ -2308,6 +2310,7 @@ mod tests {
         let usage = Usage {
             input_tokens: Some(10),
             output_tokens: Some(20),
+            cached_tokens: None,
         };
         let raw_request = "raw request".to_string();
         let model_inference_responses = vec![ModelInferenceResponseWithMetadata {
@@ -3123,6 +3126,7 @@ mod tests {
                 Usage {
                     input_tokens: Some(10),
                     output_tokens: Some(20),
+                    cached_tokens: None,
                 },
                 false,
             ),
@@ -3130,6 +3134,7 @@ mod tests {
                 Usage {
                     input_tokens: Some(15),
                     output_tokens: Some(25),
+                    cached_tokens: None,
                 },
                 false,
             ),
@@ -3155,6 +3160,7 @@ mod tests {
                 Usage {
                     input_tokens: Some(10),
                     output_tokens: Some(20),
+                    cached_tokens: None,
                 },
                 false,
             ),
@@ -3162,6 +3168,7 @@ mod tests {
                 Usage {
                     input_tokens: None,
                     output_tokens: Some(25),
+                    cached_tokens: None,
                 },
                 false,
             ),
@@ -3187,6 +3194,7 @@ mod tests {
                 Usage {
                     input_tokens: Some(10),
                     output_tokens: Some(20),
+                    cached_tokens: None,
                 },
                 false,
             ),
@@ -3194,6 +3202,7 @@ mod tests {
                 Usage {
                     input_tokens: Some(15),
                     output_tokens: None,
+                    cached_tokens: None,
                 },
                 false,
             ),
@@ -3219,6 +3228,7 @@ mod tests {
                 Usage {
                     input_tokens: None,
                     output_tokens: None,
+                    cached_tokens: None,
                 },
                 false,
             ),
@@ -3226,6 +3236,7 @@ mod tests {
                 Usage {
                     input_tokens: None,
                     output_tokens: None,
+                    cached_tokens: None,
                 },
                 false,
             ),
@@ -3252,6 +3263,7 @@ mod tests {
                 Usage {
                     input_tokens: Some(10),
                     output_tokens: Some(20),
+                    cached_tokens: None,
                 },
                 true,
             ), // This will be treated as 0/0 due to cached=true
@@ -3259,6 +3271,7 @@ mod tests {
                 Usage {
                     input_tokens: None,
                     output_tokens: Some(25),
+                    cached_tokens: None,
                 },
                 false,
             ),
@@ -3333,6 +3346,7 @@ mod tests {
         let usage = Usage {
             input_tokens: Some(10),
             output_tokens: Some(20),
+            cached_tokens: None,
         };
 
         // Create responses with different finish reasons and IDs
