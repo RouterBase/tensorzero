@@ -15,7 +15,17 @@ use crate::http::TensorzeroHttpClient;
 
 const PROVIDER_NAME: &str = "Novita";
 const PROVIDER_TYPE: &str = "novita";
+/// Per-HTTP-request timeout for individual calls to Novita (create-task
+/// submit, single poll fetch). Bounds one network round-trip, not the whole
+/// generation.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+/// Total wall-clock budget for a single async media generation to reach a
+/// terminal state. Heavy models (e.g. `sora_2_pro_i2v`) routinely render well
+/// past the old 300s; allow up to 1h before declaring a timeout. The
+/// RouterBase worker does NOT retry after this fires (`MAX_ATTEMPTS = 1`), so
+/// this is the one and only budget for a generation — no new Novita task is
+/// ever spawned for the same request.
+const ASYNC_TASK_TIMEOUT: Duration = Duration::from_secs(3600);
 
 lazy_static! {
     static ref NOVITA_API_BASE: String =
@@ -799,7 +809,7 @@ async fn poll_async_result(
         "{}/v3/async/task-result?task_id={task_id}",
         *NOVITA_API_BASE
     );
-    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    let deadline = Instant::now() + ASYNC_TASK_TIMEOUT;
     let poll_interval = Duration::from_secs(4);
 
     loop {
@@ -807,7 +817,7 @@ async fn poll_async_result(
             return Err(Error::new(ErrorDetails::InferenceServer {
                 message: format!(
                     "Novita async task {task_id} did not complete within {}s",
-                    REQUEST_TIMEOUT.as_secs()
+                    ASYNC_TASK_TIMEOUT.as_secs()
                 ),
                 provider_type: PROVIDER_TYPE.to_string(),
                 raw_request: None,
