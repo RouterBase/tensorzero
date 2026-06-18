@@ -35,6 +35,7 @@ use crate::inference::types::{
 };
 use crate::minijinja_util::TemplateConfig;
 use crate::model::ModelTable;
+use crate::providers::amux::{AmuxMediaProxyConfig, AmuxProvider};
 use crate::providers::kie::{KIECredentials, KIEProvider, PROVIDER_TYPE as KIE_PROVIDER_TYPE};
 use crate::providers::novita::{NovitaMediaProxyConfig, NovitaProvider};
 use crate::relay::TensorzeroRelay;
@@ -70,6 +71,7 @@ pub struct MediaConfig {
 #[serde(tag = "provider", rename_all = "snake_case")]
 pub enum MediaProxyConfig {
     Novita(NovitaMediaProxyConfig),
+    Amux(AmuxMediaProxyConfig),
 }
 
 impl MediaConfig {
@@ -121,6 +123,16 @@ impl Variant for MediaConfig {
             Some(proxy) => match proxy {
                 MediaProxyConfig::Novita(proxy) => {
                     NovitaProvider::infer_media_proxy(
+                        proxy,
+                        inference_params.media_generation.callback_url.as_deref(),
+                        &kie_input,
+                        &clients.http_client,
+                        &clients.credentials,
+                    )
+                    .await?
+                }
+                MediaProxyConfig::Amux(proxy) => {
+                    AmuxProvider::infer_media_proxy(
                         proxy,
                         inference_params.media_generation.callback_url.as_deref(),
                         &kie_input,
@@ -199,6 +211,7 @@ impl Variant for MediaConfig {
         if let Some(proxy) = &self.proxy {
             let path = match proxy {
                 MediaProxyConfig::Novita(proxy) => &proxy.path,
+                MediaProxyConfig::Amux(proxy) => &proxy.path,
             };
             if path.is_empty() {
                 return Err(ErrorDetails::Config {

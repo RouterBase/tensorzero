@@ -1,3 +1,4 @@
+pub mod amux;
 pub mod anthropic;
 pub mod aws_bedrock;
 pub mod aws_common;
