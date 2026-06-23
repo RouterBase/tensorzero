@@ -23,8 +23,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const ASYNC_TASK_TIMEOUT: Duration = Duration::from_secs(3600);
 
 lazy_static! {
-    static ref AMUX_API_BASE: String =
-        std::env::var("AMUX_API_BASE").unwrap_or_else(|_| "https://api.amux.ai".to_string());
+    // `unwrap_or_else` only fires on `Err`; an env var set to an empty string
+    // (e.g. docker-compose's `AMUX_API_BASE: ${AMUX_API_BASE:-}` when unset)
+    // comes back as `Ok("")` and would otherwise become an empty base URL.
+    // Filter empties so the public default still wins.
+    static ref AMUX_API_BASE: String = std::env::var("AMUX_API_BASE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://api.amux.ai".to_string());
 }
 
 pub struct AmuxProvider;
