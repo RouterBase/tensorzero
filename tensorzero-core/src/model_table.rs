@@ -26,7 +26,6 @@ use crate::{
         google_ai_studio_gemini::GoogleAIStudioCredentials,
         groq::GroqCredentials,
         hyperbolic::HyperbolicCredentials,
-        kie::KIECredentials,
         mistral::MistralCredentials,
         openai::OpenAICredentials,
         openrouter::OpenRouterCredentials,
@@ -96,7 +95,6 @@ pub enum ProviderType {
     GoogleAIStudioGemini,
     Groq,
     Hyperbolic,
-    KIE,
     Mistral,
     OpenAI,
     OpenRouter,
@@ -120,7 +118,6 @@ impl Display for ProviderType {
             ProviderType::GoogleAIStudioGemini => write!(f, "GoogleAIStudioGemini"),
             ProviderType::Groq => write!(f, "Groq"),
             ProviderType::Hyperbolic => write!(f, "Hyperbolic"),
-            ProviderType::KIE => write!(f, "KIE"),
             ProviderType::Mistral => write!(f, "Mistral"),
             ProviderType::OpenAI => write!(f, "OpenAI"),
             ProviderType::OpenRouter => write!(f, "OpenRouter"),
@@ -378,7 +375,6 @@ pub struct ProviderTypeDefaultCredentials {
     google_ai_studio_gemini: LazyCredential<GoogleAIStudioCredentials>,
     groq: LazyCredential<GroqCredentials>,
     hyperbolic: LazyCredential<HyperbolicCredentials>,
-    kie: LazyCredential<KIECredentials>,
     mistral: LazyCredential<MistralCredentials>,
     openai: LazyCredential<OpenAICredentials>,
     openrouter: LazyCredential<OpenRouterCredentials>,
@@ -432,7 +428,6 @@ impl ProviderTypeDefaultCredentials {
             .defaults
             .api_key_location
             .clone();
-        let kie_location = provider_types_config.kie.defaults.api_key_location.clone();
         let mistral_location = provider_types_config
             .mistral
             .defaults
@@ -506,9 +501,6 @@ impl ProviderTypeDefaultCredentials {
             hyperbolic: LazyCredential::new(move || {
                 load_credential_with_fallback(&hyperbolic_location, ProviderType::Hyperbolic)?
                     .try_into()
-            }),
-            kie: LazyCredential::new(move || {
-                load_credential_with_fallback(&kie_location, ProviderType::KIE)?.try_into()
             }),
             mistral: LazyCredential::new(move || {
                 load_credential_with_fallback(&mistral_location, ProviderType::Mistral)?.try_into()
@@ -928,22 +920,6 @@ impl ProviderKind for HyperbolicKind {
         default_credentials: &ProviderTypeDefaultCredentials,
     ) -> Result<Self::Credential, Error> {
         default_credentials.hyperbolic.get_cloned()
-    }
-}
-
-pub struct KIEKind;
-
-impl ProviderKind for KIEKind {
-    type Credential = KIECredentials;
-    fn get_provider_type(&self) -> ProviderType {
-        ProviderType::KIE
-    }
-
-    async fn get_credential_field(
-        &self,
-        default_credentials: &ProviderTypeDefaultCredentials,
-    ) -> Result<Self::Credential, Error> {
-        default_credentials.kie.get_cloned()
     }
 }
 

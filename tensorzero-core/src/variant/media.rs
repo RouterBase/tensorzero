@@ -36,7 +36,6 @@ use crate::inference::types::{
 use crate::minijinja_util::TemplateConfig;
 use crate::model::ModelTable;
 use crate::providers::amux::{AmuxMediaProxyConfig, AmuxProvider};
-use crate::providers::kie::{KIECredentials, KIEProvider, PROVIDER_TYPE as KIE_PROVIDER_TYPE};
 use crate::providers::novita::{NovitaMediaProxyConfig, NovitaProvider};
 use crate::relay::TensorzeroRelay;
 
@@ -99,25 +98,14 @@ impl Variant for MediaConfig {
         // Extract the user prompt text from the input.
         let prompt = extract_prompt_text(&input)?;
 
-        // Build the `input` payload for KIE's createTask.
+        // Build the `input` payload for the upstream createTask call.
         // Start with any caller-supplied extra params, then inject the prompt.
-        let mut kie_input = inference_params.media_generation.extra.clone();
-        if let Some(obj) = kie_input.as_object_mut() {
+        let mut media_input = inference_params.media_generation.extra.clone();
+        if let Some(obj) = media_input.as_object_mut() {
             obj.entry("prompt").or_insert_with(|| prompt.clone().into());
         } else {
-            kie_input = serde_json::json!({ "prompt": prompt });
+            media_input = serde_json::json!({ "prompt": prompt });
         }
-
-        // Resolve KIE credentials: prefer per-request dynamic key "KIE_API_KEY",
-        // then fall back to the KIE_API_KEY environment variable.
-        let credentials = if let Some(key) = clients.credentials.get("KIE_API_KEY") {
-            KIECredentials::Static(key.clone())
-        } else {
-            std::env::var("KIE_API_KEY")
-                .map(|k| KIECredentials::Static(secrecy::SecretString::from(k)))
-                .unwrap_or(KIECredentials::None)
-        };
-        let kie_provider = KIEProvider::new(self.model.to_string(), credentials);
 
         let task_id = match &self.proxy {
             Some(proxy) => match proxy {
@@ -125,7 +113,7 @@ impl Variant for MediaConfig {
                     NovitaProvider::infer_media_proxy(
                         proxy,
                         inference_params.media_generation.callback_url.as_deref(),
-                        &kie_input,
+                        &media_input,
                         &clients.http_client,
                         &clients.credentials,
                     )
@@ -135,7 +123,7 @@ impl Variant for MediaConfig {
                     AmuxProvider::infer_media_proxy(
                         proxy,
                         inference_params.media_generation.callback_url.as_deref(),
-                        &kie_input,
+                        &media_input,
                         &clients.http_client,
                         &clients.credentials,
                     )
@@ -143,15 +131,12 @@ impl Variant for MediaConfig {
                 }
             },
             None => {
-                kie_provider
-                    .infer_media(
-                        &self.model,
-                        inference_params.media_generation.callback_url.as_deref(),
-                        &kie_input,
-                        &clients.http_client,
-                        &clients.credentials,
-                    )
-                    .await?
+                return Err(Error::new(ErrorDetails::Config {
+                    message: format!(
+                        "media variant '{}' has no proxy configured; direct KIE media generation has been removed",
+                        self.model
+                    ),
+                }));
             }
         };
 
@@ -241,7 +226,7 @@ impl Variant for MediaConfig {
         _inference_params: Vec<InferenceParams>,
     ) -> Result<StartBatchModelInferenceWithMetadata<'a>, Error> {
         Err(ErrorDetails::UnsupportedModelProviderForBatchInference {
-            provider_type: KIE_PROVIDER_TYPE.to_string(),
+            provider_type: "media".to_string(),
         }
         .into())
     }

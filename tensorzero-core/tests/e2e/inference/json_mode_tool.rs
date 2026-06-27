@@ -76,6 +76,7 @@ model = "dummy::good"
                 }],
             },
             params: tensorzero::InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     json_mode: Some(JsonMode::Tool),
                     ..Default::default()
@@ -126,6 +127,7 @@ model = "dummy::good"
                 }],
             },
             params: tensorzero::InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     json_mode: Some(JsonMode::Tool),
                     ..Default::default()
@@ -201,6 +203,7 @@ parameters = "{}"
                 }],
             },
             params: tensorzero::InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     json_mode: Some(JsonMode::Tool),
                     ..Default::default()
@@ -267,6 +270,7 @@ model = "dummy::good"
                 }],
             },
             params: tensorzero::InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     json_mode: Some(JsonMode::Tool),
                     ..Default::default()
@@ -312,6 +316,7 @@ async fn test_model_name_with_output_schema_succeeds() {
                 }],
             },
             params: tensorzero::InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     json_mode: Some(JsonMode::Tool),
                     ..Default::default()
@@ -349,6 +354,7 @@ async fn test_model_name_without_output_schema_fails() {
                 }],
             },
             params: tensorzero::InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     json_mode: Some(JsonMode::Tool),
                     ..Default::default()
@@ -400,6 +406,7 @@ model = "dummy::good_tool"
                 }],
             },
             params: tensorzero::InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     json_mode: Some(JsonMode::Tool),
                     ..Default::default()
@@ -501,6 +508,7 @@ model = "dummy::good_tool"
                 }],
             },
             params: tensorzero::InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     json_mode: Some(JsonMode::Tool),
                     ..Default::default()
@@ -792,6 +800,7 @@ Text: \"My name is Megumin. I love my job as an archmage.\""#;
                 }],
             },
             params: tensorzero::InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     json_mode: Some(JsonMode::Tool),
                     ..Default::default()

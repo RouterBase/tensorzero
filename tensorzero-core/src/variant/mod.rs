@@ -1017,6 +1017,7 @@ mod tests {
 
         // Define common inference parameters
         let inference_params = InferenceParams {
+            media_generation: Default::default(),
             chat_completion: ChatCompletionInferenceParams {
                 temperature: Some(0.7),
                 max_tokens: Some(50),

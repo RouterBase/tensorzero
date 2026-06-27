@@ -233,6 +233,7 @@ async fn test_error_propagates_non_streaming_embedded_gateway() {
             },
             stream: Some(false),
             params: InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     thinking_budget_tokens: Some(-9999),
                     ..Default::default()
@@ -271,6 +272,7 @@ async fn test_error_propagates_streaming_embedded_gateway() {
             },
             stream: Some(true),
             params: InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     thinking_budget_tokens: Some(-9999),
                     ..Default::default()

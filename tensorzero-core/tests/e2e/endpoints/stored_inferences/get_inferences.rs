@@ -1303,6 +1303,7 @@ pub async fn test_get_by_ids_with_extra_body_and_inference_params() {
     ]);
 
     let params = InferenceParams {
+        media_generation: Default::default(),
         chat_completion: ChatCompletionInferenceParams {
             temperature: Some(0.7),
             max_tokens: Some(100),
@@ -1397,6 +1398,7 @@ pub async fn test_get_by_ids_json_function_with_inference_params() {
     ]);
 
     let params = InferenceParams {
+        media_generation: Default::default(),
         chat_completion: ChatCompletionInferenceParams {
             temperature: Some(0.5),
             max_tokens: Some(200),

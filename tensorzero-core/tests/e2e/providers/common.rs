@@ -9235,6 +9235,7 @@ pub async fn test_stop_sequences_inference_request_with_provider(
             },
             extra_headers,
             params: tensorzero::InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     stop_sequences: Some(vec!["TensorZero".to_string()]),
                     ..Default::default()
