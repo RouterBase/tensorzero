@@ -1492,6 +1492,7 @@ mod tests {
         };
 
         let mut inference_params = InferenceParams {
+            media_generation: Default::default(),
             chat_completion: ChatCompletionInferenceParams::default(),
         };
 
@@ -1622,6 +1623,7 @@ mod tests {
         };
 
         let mut inference_params = InferenceParams {
+            media_generation: Default::default(),
             chat_completion: ChatCompletionInferenceParams::default(),
         };
 

@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::endpoints::inference::InferenceCredentials;
 use crate::error::{Error, ErrorDetails};
 use crate::http::TensorzeroHttpClient;
+use crate::utils::spawn_ignoring_shutdown;
 
 const PROVIDER_NAME: &str = "Novita";
 const PROVIDER_TYPE: &str = "novita";
@@ -178,7 +179,15 @@ impl NovitaProvider {
             })
         })?;
 
-        let (task_id, result_body) = if proxy.async_submission {
+        if proxy.async_submission {
+            // Async submission: Novita returns a `task_id` immediately and the
+            // media renders out-of-band. We must NOT block the inference
+            // response on the full render — RouterBase's submit call (and the
+            // browser behind it) would hold the connection open for the entire
+            // generation and trip the Cloudflare ~100s origin timeout (524),
+            // even though the task succeeds server-side. Instead, return the
+            // `task_id` now and poll + fire the callback in a detached task;
+            // RouterBase records `pending` and settles when the callback lands.
             let task_id = raw_json
                 .get("task_id")
                 .and_then(Value::as_str)
@@ -191,20 +200,66 @@ impl NovitaProvider {
                     })
                 })?
                 .to_string();
-            let result_body =
-                poll_async_result(http_client, api_key.expose_secret(), &task_id).await?;
-            (task_id, result_body)
-        } else {
-            (format!("novita-{}", Uuid::new_v4()), raw_json)
-        };
 
-        let urls = parse_urls(&result_body);
+            let http_client_bg = http_client.clone();
+            let api_key_bg = api_key.expose_secret().to_string();
+            let callback_url_bg = callback_url.to_string();
+            let task_id_bg = task_id.clone();
+            spawn_ignoring_shutdown(async move {
+                match poll_async_result(&http_client_bg, &api_key_bg, &task_id_bg).await {
+                    Ok(result_body) => {
+                        let urls = parse_urls(&result_body);
+                        if urls.is_empty() {
+                            tracing::error!(
+                                "Novita task {task_id_bg} completed but returned no media URLs"
+                            );
+                            post_media_callback_failure(
+                                &http_client_bg,
+                                &callback_url_bg,
+                                &task_id_bg,
+                                "Generation completed but returned no media",
+                            )
+                            .await;
+                        } else if let Err(e) = post_media_callback(
+                            &http_client_bg,
+                            &callback_url_bg,
+                            &task_id_bg,
+                            &urls,
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                "Failed to deliver success callback for Novita task {task_id_bg}: {e}"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Novita task {task_id_bg} failed: {e}");
+                        post_media_callback_failure(
+                            &http_client_bg,
+                            &callback_url_bg,
+                            &task_id_bg,
+                            &e.to_string(),
+                        )
+                        .await;
+                    }
+                }
+            });
+
+            return Ok(task_id);
+        }
+
+        // Synchronous submission: Novita returned the media inline. This path is
+        // fast (no polling), so delivering the callback before returning does
+        // not risk the origin timeout.
+        let task_id = format!("novita-{}", Uuid::new_v4());
+        let urls = parse_urls(&raw_json);
         if urls.is_empty() {
             return Err(Error::new(ErrorDetails::InferenceServer {
                 message: "Novita completed but returned no media URLs".to_string(),
                 provider_type: PROVIDER_TYPE.to_string(),
                 raw_request: Some(serde_json::to_string(&body).unwrap_or_default()),
-                raw_response: Some(result_body.to_string()),
+                raw_response: Some(raw_json.to_string()),
             }));
         }
 
@@ -255,6 +310,7 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "image_base64s",
         ],
         NovitaRequestShape::GptImageTextToImage => &[
+            "size",
             "n",
             "quality",
             "background",
@@ -263,6 +319,7 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "output_compression",
         ],
         NovitaRequestShape::GptImageEdit => &[
+            "size",
             "n",
             "quality",
             "background",
@@ -938,4 +995,44 @@ async fn post_media_callback(
     }
 
     Ok(())
+}
+
+/// Deliver a `fail` callback to RouterBase when an async media task errors out
+/// after we've already returned the `task_id` (so the error can no longer be
+/// surfaced inline on the inference response). Mirrors the shapes RouterBase's
+/// `media_callback` handler probes for state + failure reason. Best-effort: a
+/// delivery failure is logged, not propagated (there is no caller to receive
+/// it — this runs in a detached task).
+async fn post_media_callback_failure(
+    http_client: &TensorzeroHttpClient,
+    callback_url: &str,
+    task_id: &str,
+    error_message: &str,
+) {
+    let body = json!({
+        "taskId": task_id,
+        "task_id": task_id,
+        "state": "fail",
+        "errorMessage": error_message,
+        "data": {
+            "taskId": task_id,
+            "task_id": task_id,
+            "failMsg": error_message,
+        }
+    });
+    match http_client.post(callback_url).json(&body).send().await {
+        Ok(response) if response.status().is_success() => {}
+        Ok(response) => {
+            let status = response.status();
+            let raw = response.text().await.unwrap_or_default();
+            tracing::error!(
+                "RouterBase media failure-callback returned {status} for task {task_id}: {raw}"
+            );
+        }
+        Err(e) => {
+            tracing::error!(
+                "RouterBase media failure-callback request failed for task {task_id}: {e}"
+            );
+        }
+    }
 }

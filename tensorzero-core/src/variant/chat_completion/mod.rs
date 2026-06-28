@@ -2068,6 +2068,7 @@ mod tests {
             experimentation: ExperimentationConfig::default(),
         }));
         let inference_params = InferenceParams {
+            media_generation: Default::default(),
             chat_completion: ChatCompletionInferenceParams {
                 temperature: Some(0.5),
                 max_tokens: Some(100),
@@ -2292,6 +2293,7 @@ mod tests {
                     Arc::<str>::from("json")
                 );
                 let expected_inference_params = InferenceParams {
+                    media_generation: Default::default(),
                     chat_completion: ChatCompletionInferenceParams {
                         temperature: Some(0.5),
                         max_tokens: Some(100),
@@ -2691,6 +2693,7 @@ mod tests {
         assert_eq!(inference_params.chat_completion.seed, Some(69));
 
         let mut inference_params = InferenceParams {
+            media_generation: Default::default(),
             chat_completion: ChatCompletionInferenceParams {
                 temperature: Some(1.),
                 max_tokens: Some(200),
@@ -2815,6 +2818,7 @@ mod tests {
         // We will vary temperature, max_tokens, and seed
         let chat_completion_config = ChatCompletionConfig::default();
         let mut inference_params = InferenceParams {
+            media_generation: Default::default(),
             chat_completion: ChatCompletionInferenceParams {
                 temperature: Some(0.9),
                 ..Default::default()

@@ -272,6 +272,7 @@ async fn make_non_streaming_inference(client: &Client) -> ResponseData {
                 }],
             },
             params: InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     max_tokens: Some(1000),
                     ..Default::default()
@@ -325,6 +326,7 @@ async fn make_streaming_inference(client: &Client) -> ResponseData {
                 }],
             },
             params: InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     max_tokens: Some(1000),
                     ..Default::default()
@@ -421,6 +423,7 @@ async fn test_stream_fatal_error_usage() {
                 }],
             },
             params: InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     max_tokens: Some(1000),
                     ..Default::default()
@@ -935,6 +938,7 @@ pub fn test_capture_model_error(mode: OtlpTracesFormat, config_mode: &str) {
                     }],
                 },
                 params: InferenceParams {
+                    media_generation: Default::default(),
                     chat_completion: ChatCompletionInferenceParams {
                         max_tokens: Some(1000),
                         ..Default::default()
@@ -1160,6 +1164,7 @@ pub fn test_capture_rate_limit_error() {
                     }],
                 },
                 params: InferenceParams {
+                    media_generation: Default::default(),
                     chat_completion: ChatCompletionInferenceParams {
                         max_tokens: Some(1000),
                         ..Default::default()

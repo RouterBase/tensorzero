@@ -98,6 +98,7 @@ async fn make_request_with_tags(
                 }],
             },
             params: InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     max_tokens: Some(100),
                     ..Default::default()
@@ -1122,6 +1123,7 @@ async fn test_rate_limiting_cancelled_stream_return_tokens_postgres() {
             },
             tags: tags_match.clone(),
             params: InferenceParams {
+                media_generation: Default::default(),
                 chat_completion: ChatCompletionInferenceParams {
                     max_tokens: Some(50),
                     ..Default::default()
