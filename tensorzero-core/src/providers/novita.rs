@@ -117,6 +117,35 @@ pub enum NovitaRequestShape {
     /// remapped from image_urls[0..3]).
     #[serde(rename = "wan_2_7_video_edit")]
     Wan27VideoEdit,
+    /// MidJourney text-to-image. Per `/v3/async/mj-txt2img`: `text`
+    /// (the prompt; MJ flags like `--ar 16:9 --stylize 200` are embedded
+    /// in the text). Maps the user's `prompt` onto `text`. Resolves to a
+    /// 4-image grid.
+    MjTextToImage,
+    /// MidJourney variation. Per `/v3/async/mj-variation`: `task_id`,
+    /// `image_no` (0–3), `type` (0 subtle | 1 strong), optional
+    /// `remix_prompt`. Operates on a prior MJ task's grid image — no
+    /// prompt of its own.
+    MjVariation,
+    /// MidJourney upscale. Per `/v3/async/mj-upscale`: `task_id`,
+    /// `image_no` (0–3), `type` (0 subtle | 1 creative). No prompt.
+    MjUpscale,
+    /// MidJourney reroll (re-run a task). Per `/v3/async/mj-reroll`:
+    /// `task_id`. No prompt, no image_no.
+    MjReroll,
+    /// MidJourney outpaint (zoom out). Per `/v3/async/mj-outpaint`:
+    /// `task_id`, `image_no` (0–3), `remix_prompt`, `scale` (1.1–2.0).
+    MjOutpaint,
+    /// MidJourney inpaint (region redraw). Per `/v3/async/mj-inpaint`:
+    /// `task_id`, `image_no` (0–3), optional `remix_prompt`, `mask`
+    /// (object: `url` to a B/W mask, or `areas` polygon list).
+    MjInpaint,
+    /// MidJourney remix (reshape). Per `/v3/async/mj-remix`: `task_id`,
+    /// `image_no` (0–3), `remix_prompt`, `mode` (0 strong | 1 subtle).
+    MjRemix,
+    /// MidJourney remove-background. Per `/v3/async/mj-remove-background`:
+    /// `url` (image URL). No prompt, no task reference.
+    MjRemoveBackground,
 }
 
 impl NovitaProvider {
@@ -284,18 +313,43 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 }
 
 fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error> {
+    let mut body = serde_json::Map::new();
+
+    // Most Novita media shapes require a prompt. The MidJourney edit/op shapes
+    // act on a prior task (task_id/image_no) or a URL and carry no top-level
+    // prompt, so it's optional for them.
+    let prompt_optional = matches!(
+        shape,
+        NovitaRequestShape::MjVariation
+            | NovitaRequestShape::MjUpscale
+            | NovitaRequestShape::MjReroll
+            | NovitaRequestShape::MjOutpaint
+            | NovitaRequestShape::MjInpaint
+            | NovitaRequestShape::MjRemix
+            | NovitaRequestShape::MjRemoveBackground
+    );
     let prompt = input
         .get("prompt")
         .and_then(Value::as_str)
-        .filter(|prompt| !prompt.is_empty())
-        .ok_or_else(|| {
-            Error::new(ErrorDetails::InvalidRequest {
+        .filter(|prompt| !prompt.is_empty());
+    match prompt {
+        Some(prompt) => {
+            // mj-txt2img names the prompt field `text`; everything else uses
+            // `prompt`.
+            let key = if matches!(shape, NovitaRequestShape::MjTextToImage) {
+                "text"
+            } else {
+                "prompt"
+            };
+            body.insert(key.into(), Value::from(prompt));
+        }
+        None if !prompt_optional => {
+            return Err(Error::new(ErrorDetails::InvalidRequest {
                 message: "Novita-backed media variants require a prompt".to_string(),
-            })
-        })?;
-
-    let mut body = serde_json::Map::new();
-    body.insert("prompt".into(), Value::from(prompt));
+            }));
+        }
+        None => {}
+    }
 
     let allowed: &[&str] = match shape {
         NovitaRequestShape::GeminiImageTextToImage => {
@@ -480,6 +534,17 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "prompt_extend",
             "negative_prompt",
         ],
+        // MidJourney. mj-txt2img's `text` is inserted from the prompt above;
+        // the edit/op shapes forward their task/image references straight
+        // through. `mask` (inpaint) is an object, copied as-is.
+        NovitaRequestShape::MjTextToImage => &["text"],
+        NovitaRequestShape::MjVariation => &["task_id", "image_no", "type", "remix_prompt"],
+        NovitaRequestShape::MjUpscale => &["task_id", "image_no", "type"],
+        NovitaRequestShape::MjReroll => &["task_id"],
+        NovitaRequestShape::MjOutpaint => &["task_id", "image_no", "remix_prompt", "scale"],
+        NovitaRequestShape::MjInpaint => &["task_id", "image_no", "remix_prompt", "mask"],
+        NovitaRequestShape::MjRemix => &["task_id", "image_no", "remix_prompt", "mode"],
+        NovitaRequestShape::MjRemoveBackground => &["url"],
     };
 
     if let Some(input_obj) = input.as_object() {
@@ -601,6 +666,44 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             .and_then(|arr| arr.first())
         {
             body.insert("image".into(), first.clone());
+        }
+    }
+
+    // MidJourney edit/op shapes: Novita's mj-* schemas are strict about types.
+    // Coerce the integer knobs (`image_no`, `type`, `mode`) and the float
+    // `scale` from the string form RouterBase's media surface may ship; and for
+    // inpaint, wrap the `mask` image URL into the `{url}` object Novita expects
+    // (the parameter_schema models it as a plain URL, the common B/W-mask case).
+    if matches!(
+        shape,
+        NovitaRequestShape::MjVariation
+            | NovitaRequestShape::MjUpscale
+            | NovitaRequestShape::MjReroll
+            | NovitaRequestShape::MjOutpaint
+            | NovitaRequestShape::MjInpaint
+            | NovitaRequestShape::MjRemix
+    ) {
+        for key in ["image_no", "type", "mode"] {
+            let parsed = body
+                .get(key)
+                .and_then(Value::as_str)
+                .and_then(|s| s.parse::<i64>().ok());
+            if let Some(n) = parsed {
+                body.insert(key.to_string(), Value::from(n));
+            }
+        }
+        let scale = body
+            .get("scale")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse::<f64>().ok());
+        if let Some(f) = scale {
+            body.insert("scale".into(), Value::from(f));
+        }
+        if matches!(shape, NovitaRequestShape::MjInpaint) {
+            let mask_url = body.get("mask").and_then(Value::as_str).map(String::from);
+            if let Some(url) = mask_url {
+                body.insert("mask".into(), serde_json::json!({ "url": url }));
+            }
         }
     }
 
