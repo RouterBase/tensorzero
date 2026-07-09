@@ -117,6 +117,65 @@ pub enum NovitaRequestShape {
     /// remapped from image_urls[0..3]).
     #[serde(rename = "wan_2_7_video_edit")]
     Wan27VideoEdit,
+    /// Vidu Q1 text-to-video. Per `/v3/async/vidu-q1-text2video`: prompt
+    /// (required), style (general|anime), duration (5 only), resolution
+    /// (1080p only), aspect_ratio, movement_amplitude (auto|small|medium|
+    /// large), seed, bgm. Q1 predates native audio — no `audio` field.
+    #[serde(rename = "vidu_q1_text_to_video")]
+    ViduQ1TextToVideo,
+    /// Vidu Q1 image-to-video. Per `/v3/async/vidu-q1-img2video`: images
+    /// (single-element array, remapped from `image_urls`), prompt
+    /// (optional), duration (5), resolution (1080p), movement_amplitude,
+    /// seed, bgm.
+    #[serde(rename = "vidu_q1_image_to_video")]
+    ViduQ1ImageToVideo,
+    /// Vidu Q1 reference-to-video. Per `/v3/async/vidu-q1-reference2video`:
+    /// images (1–7, remapped from `image_urls`), prompt (required),
+    /// duration (5), resolution (1080p), aspect_ratio, movement_amplitude,
+    /// seed, bgm.
+    #[serde(rename = "vidu_q1_reference_to_video")]
+    ViduQ1ReferenceToVideo,
+    /// Vidu Q2 text-to-video. Per `/v3/async/vidu-q2-text2video`: prompt
+    /// (required), duration (int 1–10), resolution (540p|720p|1080p),
+    /// aspect_ratio, style, movement_amplitude (auto|small|medium|high),
+    /// seed, bgm, audio (bool), watermark, subjects.
+    #[serde(rename = "vidu_q2_text_to_video")]
+    ViduQ2TextToVideo,
+    /// Vidu Q2 image-to-video (shared by `vidu-q2-pro-img2video` and
+    /// `vidu-q2-turbo-img2video`; they differ only by the slug in the URL
+    /// path). images (single, remapped from `image_urls`), prompt
+    /// (required), duration (1–10), resolution, movement_amplitude, seed,
+    /// bgm, audio (bool), voice_id, watermark.
+    #[serde(rename = "vidu_q2_image_to_video")]
+    ViduQ2ImageToVideo,
+    /// Vidu Q2 subject/reference-to-video (shared by `vidu-q2-reference2video`
+    /// and `viduq2-pro-fast`). prompt (required), duration (1–10), subjects
+    /// (array of `{id|name, images, voice_id}`, forwarded as-is), resolution,
+    /// aspect_ratio, movement_amplitude, seed, bgm, audio (bool), watermark.
+    #[serde(rename = "vidu_q2_subject_to_video")]
+    ViduQ2SubjectToVideo,
+    /// Vidu Q3 text-to-video (shared by `vidu-q3-turbo-t2v` and
+    /// `vidu-q3-pro-t2v`). Native audio-video co-gen (`audio` defaults true).
+    /// prompt (required), duration (int 1–16), resolution, aspect_ratio,
+    /// seed, audio (bool), watermark, wm_url, wm_position.
+    #[serde(rename = "vidu_q3_text_to_video")]
+    ViduQ3TextToVideo,
+    /// Vidu Q3 image-to-video (shared by `vidu-q3-turbo-i2v` and
+    /// `vidu-q3-pro-i2v`). images (single, remapped from `image_urls`),
+    /// prompt (optional), duration (1–16), resolution, aspect_ratio, style,
+    /// seed, audio, audio_type, is_rec, watermark, wm_url, wm_position.
+    /// NOTE: on `vidu-q3-pro-i2v` the `audio` value is an audio-track URL
+    /// (lip-sync input) rather than a bool — the allow-list forwards
+    /// whatever value the caller supplies, so both shapes share one arm.
+    #[serde(rename = "vidu_q3_image_to_video")]
+    ViduQ3ImageToVideo,
+    /// Vidu Q3 start-end-to-video (shared by `vidu-q3-turbo-f2v` and
+    /// `vidu-q3-pro-f2v`). images = exactly `[start_frame, end_frame]`
+    /// (remapped from `image_urls`), prompt (optional), duration (1–16),
+    /// resolution, seed, audio (bool), is_rec, watermark, wm_url,
+    /// wm_position.
+    #[serde(rename = "vidu_q3_first_last_to_video")]
+    ViduQ3FirstLastToVideo,
 }
 
 impl NovitaProvider {
@@ -284,18 +343,32 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 }
 
 fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error> {
-    let prompt = input
+    // A few Vidu image/start-end shapes accept an *optional* prompt (the
+    // reference image carries the intent); every other Novita media variant
+    // requires one. Insert the prompt when present, and only error when it's
+    // both absent and required for this shape.
+    let prompt_optional = matches!(
+        shape,
+        NovitaRequestShape::ViduQ1ImageToVideo
+            | NovitaRequestShape::ViduQ3ImageToVideo
+            | NovitaRequestShape::ViduQ3FirstLastToVideo
+    );
+    let mut body = serde_json::Map::new();
+    match input
         .get("prompt")
         .and_then(Value::as_str)
         .filter(|prompt| !prompt.is_empty())
-        .ok_or_else(|| {
-            Error::new(ErrorDetails::InvalidRequest {
+    {
+        Some(prompt) => {
+            body.insert("prompt".into(), Value::from(prompt));
+        }
+        None if prompt_optional => {}
+        None => {
+            return Err(Error::new(ErrorDetails::InvalidRequest {
                 message: "Novita-backed media variants require a prompt".to_string(),
-            })
-        })?;
-
-    let mut body = serde_json::Map::new();
-    body.insert("prompt".into(), Value::from(prompt));
+            }));
+        }
+    }
 
     let allowed: &[&str] = match shape {
         NovitaRequestShape::GeminiImageTextToImage => {
@@ -480,6 +553,102 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "prompt_extend",
             "negative_prompt",
         ],
+        // ── Vidu (Q1/Q2/Q3) ──
+        // `off_peak` is deliberately omitted from every Vidu allow-list:
+        // RouterBase always charges Vidu's peak (normal) price, so it must
+        // never forward `off_peak=true` (which would make Novita bill us the
+        // 50%-off rate while the user paid peak). `image_urls` is likewise
+        // absent here — it's remapped to Novita's native `images` array below.
+        NovitaRequestShape::ViduQ1TextToVideo => &[
+            "style",
+            "duration",
+            "resolution",
+            "aspect_ratio",
+            "movement_amplitude",
+            "seed",
+            "bgm",
+        ],
+        NovitaRequestShape::ViduQ1ImageToVideo => &[
+            "duration",
+            "resolution",
+            "movement_amplitude",
+            "seed",
+            "bgm",
+        ],
+        NovitaRequestShape::ViduQ1ReferenceToVideo => &[
+            "duration",
+            "resolution",
+            "aspect_ratio",
+            "movement_amplitude",
+            "seed",
+            "bgm",
+        ],
+        NovitaRequestShape::ViduQ2TextToVideo => &[
+            "duration",
+            "resolution",
+            "aspect_ratio",
+            "style",
+            "movement_amplitude",
+            "seed",
+            "bgm",
+            "audio",
+            "watermark",
+            "subjects",
+        ],
+        NovitaRequestShape::ViduQ2ImageToVideo => &[
+            "duration",
+            "resolution",
+            "movement_amplitude",
+            "seed",
+            "bgm",
+            "audio",
+            "voice_id",
+            "watermark",
+        ],
+        NovitaRequestShape::ViduQ2SubjectToVideo => &[
+            "duration",
+            "subjects",
+            "resolution",
+            "aspect_ratio",
+            "movement_amplitude",
+            "seed",
+            "bgm",
+            "audio",
+            "watermark",
+        ],
+        NovitaRequestShape::ViduQ3TextToVideo => &[
+            "duration",
+            "resolution",
+            "aspect_ratio",
+            "seed",
+            "audio",
+            "watermark",
+            "wm_url",
+            "wm_position",
+        ],
+        NovitaRequestShape::ViduQ3ImageToVideo => &[
+            "duration",
+            "resolution",
+            "aspect_ratio",
+            "style",
+            "seed",
+            "audio",
+            "audio_type",
+            "is_rec",
+            "watermark",
+            "wm_url",
+            "wm_position",
+        ],
+        NovitaRequestShape::ViduQ3FirstLastToVideo => &[
+            "duration",
+            "resolution",
+            "seed",
+            "audio",
+            "is_rec",
+            "watermark",
+            "wm_url",
+            "wm_position",
+        ],
     };
 
     if let Some(input_obj) = input.as_object() {
@@ -487,6 +656,24 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             if let Some(value) = input_obj.get(*key) {
                 body.insert((*key).to_string(), value.clone());
             }
+        }
+    }
+
+    // Vidu takes image inputs as a native `images` array (URLs or Base64).
+    // RouterBase's schema/playground uses `image_urls` for parity with the
+    // other i2v families; forward the whole array through under `images`.
+    // For start-end (f2v) the array is already ordered `[start, end]`.
+    if matches!(
+        shape,
+        NovitaRequestShape::ViduQ1ImageToVideo
+            | NovitaRequestShape::ViduQ1ReferenceToVideo
+            | NovitaRequestShape::ViduQ2ImageToVideo
+            | NovitaRequestShape::ViduQ3ImageToVideo
+            | NovitaRequestShape::ViduQ3FirstLastToVideo
+    ) && !body.contains_key("images")
+    {
+        if let Some(images) = input.get("image_urls").and_then(Value::as_array) {
+            body.insert("images".into(), Value::Array(images.clone()));
         }
     }
 
@@ -1034,5 +1221,91 @@ async fn post_media_callback_failure(
                 "RouterBase media failure-callback request failed for task {task_id}: {e}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod vidu_build_body_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn image_urls_remap_to_images_array() {
+        let input = json!({
+            "prompt": "a cat waves",
+            "image_urls": ["https://x/a.jpg"],
+            "duration": 5,
+            "resolution": "720p"
+        });
+        let body = build_body(&NovitaRequestShape::ViduQ2ImageToVideo, &input).unwrap();
+        assert_eq!(
+            body.get("images"),
+            Some(&json!(["https://x/a.jpg"])),
+            "image_urls must be forwarded to Novita's native `images` array"
+        );
+        assert!(
+            body.get("image_urls").is_none(),
+            "the RouterBase-only `image_urls` key must not leak upstream"
+        );
+    }
+
+    #[test]
+    fn start_end_frames_preserve_order() {
+        let input = json!({
+            "image_urls": ["https://x/start.jpg", "https://x/end.jpg"],
+            "duration": 8
+        });
+        let body = build_body(&NovitaRequestShape::ViduQ3FirstLastToVideo, &input).unwrap();
+        assert_eq!(
+            body.get("images"),
+            Some(&json!(["https://x/start.jpg", "https://x/end.jpg"])),
+            "start-end frames must reach `images` as an ordered [start, end] array"
+        );
+    }
+
+    #[test]
+    fn prompt_optional_for_image_shapes() {
+        let input = json!({ "image_urls": ["https://x/a.jpg"], "duration": 5 });
+        let body = build_body(&NovitaRequestShape::ViduQ3ImageToVideo, &input).unwrap();
+        assert!(
+            body.get("prompt").is_none(),
+            "Q3 i2v must accept a missing prompt without erroring"
+        );
+    }
+
+    #[test]
+    fn prompt_required_for_text_shapes() {
+        let input = json!({ "duration": 5, "resolution": "720p" });
+        assert!(
+            build_body(&NovitaRequestShape::ViduQ2TextToVideo, &input).is_err(),
+            "text-to-video must reject a request with no prompt"
+        );
+    }
+
+    #[test]
+    fn off_peak_is_never_forwarded() {
+        let input = json!({
+            "prompt": "sunset",
+            "duration": 5,
+            "resolution": "1080p",
+            "off_peak": true
+        });
+        let body = build_body(&NovitaRequestShape::ViduQ3TextToVideo, &input).unwrap();
+        assert!(
+            body.get("off_peak").is_none(),
+            "off_peak must never reach Novita — RouterBase always charges the peak rate"
+        );
+    }
+
+    #[test]
+    fn subjects_passthrough_for_reference_shape() {
+        let subjects = json!([{ "id": "@1", "images": ["https://x/s.jpg"] }]);
+        let input = json!({ "prompt": "@1 dances", "duration": 5, "subjects": subjects });
+        let body = build_body(&NovitaRequestShape::ViduQ2SubjectToVideo, &input).unwrap();
+        assert_eq!(
+            body.get("subjects"),
+            Some(&subjects),
+            "subjects[] must be forwarded verbatim for reference/subject video"
+        );
     }
 }
