@@ -55,10 +55,11 @@ pub enum NovitaRequestShape {
     GptImageTextToImage,
     GptImageEdit,
     /// ByteDance Seedream 3.0 text-to-image. Per `/v3/seedream-3-0-txt2img`:
-    /// prompt (required), size (512x512–2048x2048), seed, guidance_scale
-    /// (1–10), response_format (url|b64_json), watermark. This is a SYNCHRONOUS
-    /// endpoint (returns `image_urls` inline, no task_id). The upstream also
-    /// requires a fixed body `model` string, injected below.
+    /// prompt (required), seed, response_format (url|b64_json), watermark. This
+    /// is a SYNCHRONOUS endpoint (returns `image_urls` inline, no task_id). The
+    /// upstream also requires a fixed body `model` string, injected below.
+    /// `size` and `guidance_scale` are documented but the checkpoint TASK_FAILs
+    /// whenever either is present, so they are NOT forwarded (see allow-list).
     #[serde(rename = "seedream_v3_text_to_image")]
     SeedreamV3TextToImage,
     /// ByteDance Seedream 4.0 text-to-image. Per `/v3/seedream-4.0`: prompt
@@ -419,13 +420,10 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "image",
             "mask",
         ],
-        NovitaRequestShape::SeedreamV3TextToImage => &[
-            "size",
-            "seed",
-            "guidance_scale",
-            "response_format",
-            "watermark",
-        ],
+        // `size` and `guidance_scale` are documented Seedream 3.0 params but the
+        // Novita checkpoint TASK_FAILs whenever either is present, so they are
+        // deliberately NOT forwarded.
+        NovitaRequestShape::SeedreamV3TextToImage => &["seed", "response_format", "watermark"],
         NovitaRequestShape::SeedreamV4TextToImage => &[
             "size",
             "sequential_image_generation",
@@ -1420,8 +1418,9 @@ mod vidu_build_body_tests {
     fn seedream_v3_forces_the_checkpoint_model_and_filters_params() {
         let input = json!({
             "prompt": "a red panda barista",
-            "size": "1024x1024",
-            "guidance_scale": 3.0,
+            "seed": 42,
+            "size": "1024x1024",   // documented but poisons the checkpoint -> filtered
+            "guidance_scale": 3.0, // documented but poisons the checkpoint -> filtered
             "model": "attacker-picked-checkpoint", // must be overridden, not honored
             "aspect_ratio": "16:9",                // not in the 3.0 allow-list
         });
@@ -1437,9 +1436,17 @@ mod vidu_build_body_tests {
             "prompt must be forwarded"
         );
         assert_eq!(
-            body.get("size").and_then(Value::as_str),
-            Some("1024x1024"),
-            "size is in the 3.0 allow-list and must be forwarded"
+            body.get("seed").and_then(Value::as_i64),
+            Some(42),
+            "seed is in the 3.0 allow-list and must be forwarded"
+        );
+        assert!(
+            body.get("size").is_none(),
+            "size TASK_FAILs the 3.0 checkpoint and must be filtered out"
+        );
+        assert!(
+            body.get("guidance_scale").is_none(),
+            "guidance_scale TASK_FAILs the 3.0 checkpoint and must be filtered out"
         );
         assert!(
             body.get("aspect_ratio").is_none(),
