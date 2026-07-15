@@ -54,6 +54,24 @@ pub enum NovitaRequestShape {
     GeminiImageEdit,
     GptImageTextToImage,
     GptImageEdit,
+    /// ByteDance Seedream 3.0 text-to-image. Per `/v3/seedream-3-0-txt2img`:
+    /// prompt (required), size (512x512–2048x2048), seed, guidance_scale
+    /// (1–10), response_format (url|b64_json), watermark. This is a SYNCHRONOUS
+    /// endpoint (returns `image_urls` inline, no task_id). The upstream also
+    /// requires a fixed body `model` string, injected below.
+    #[serde(rename = "seedream_v3_text_to_image")]
+    SeedreamV3TextToImage,
+    /// ByteDance Seedream 4.0 text-to-image. Per `/v3/seedream-4.0`: prompt
+    /// (required), size (1K/2K/4K or WxH), sequential_image_generation
+    /// (auto|disabled), max_images (1–15), watermark. Synchronous (`images`).
+    #[serde(rename = "seedream_v4_text_to_image")]
+    SeedreamV4TextToImage,
+    /// ByteDance Seedream 4.5 / 5.0-lite text-to-image — identical param
+    /// surface, so one shape. Per `/v3/seedream-4.5` and `/v3/seedream-5.0-lite`:
+    /// prompt (required), size (2K/4K/WxH; 5.0-lite also 3K), watermark,
+    /// sequential_image_generation. Synchronous (`images`).
+    #[serde(rename = "seedream_image")]
+    SeedreamImage,
     VeoTextToVideo,
     VeoImageToVideo,
     Veo31ImageToVideo,
@@ -401,6 +419,20 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "image",
             "mask",
         ],
+        NovitaRequestShape::SeedreamV3TextToImage => &[
+            "size",
+            "seed",
+            "guidance_scale",
+            "response_format",
+            "watermark",
+        ],
+        NovitaRequestShape::SeedreamV4TextToImage => &[
+            "size",
+            "sequential_image_generation",
+            "max_images",
+            "watermark",
+        ],
+        NovitaRequestShape::SeedreamImage => &["size", "sequential_image_generation", "watermark"],
         NovitaRequestShape::VeoTextToVideo => &[
             "aspect_ratio",
             "duration_seconds",
@@ -740,6 +772,13 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
                 body.insert("last_image_url".into(), Value::from(value));
             }
         }
+    }
+
+    // Seedream 3.0's endpoint requires a fixed body `model` string identifying
+    // the checkpoint (the URL slug alone is not enough). It's server-forced so
+    // a caller can't select a different checkpoint by passing their own `model`.
+    if matches!(shape, NovitaRequestShape::SeedreamV3TextToImage) {
+        body.insert("model".into(), Value::from("seedream-3-0-t2i-250415"));
     }
 
     // Sora 2 routes the Pro/non-Pro distinction through a single Novita
@@ -1374,6 +1413,77 @@ mod vidu_build_body_tests {
             body.get("subjects"),
             Some(&subjects),
             "subjects[] must be forwarded verbatim for reference/subject video"
+        );
+    }
+
+    #[test]
+    fn seedream_v3_forces_the_checkpoint_model_and_filters_params() {
+        let input = json!({
+            "prompt": "a red panda barista",
+            "size": "1024x1024",
+            "guidance_scale": 3.0,
+            "model": "attacker-picked-checkpoint", // must be overridden, not honored
+            "aspect_ratio": "16:9",                // not in the 3.0 allow-list
+        });
+        let body = build_body(&NovitaRequestShape::SeedreamV3TextToImage, &input).unwrap();
+        assert_eq!(
+            body.get("model").and_then(Value::as_str),
+            Some("seedream-3-0-t2i-250415"),
+            "Seedream 3.0 must force the checkpoint model server-side, ignoring caller input"
+        );
+        assert_eq!(
+            body.get("prompt").and_then(Value::as_str),
+            Some("a red panda barista"),
+            "prompt must be forwarded"
+        );
+        assert_eq!(
+            body.get("size").and_then(Value::as_str),
+            Some("1024x1024"),
+            "size is in the 3.0 allow-list and must be forwarded"
+        );
+        assert!(
+            body.get("aspect_ratio").is_none(),
+            "aspect_ratio is NOT a Seedream 3.0 param and must be filtered out"
+        );
+    }
+
+    #[test]
+    fn seedream_image_shape_forwards_only_allowed_params() {
+        // 4.5 / 5.0-lite share this shape. `guidance_scale` (a 3.0-only param)
+        // must not leak through; `size`/`watermark` must.
+        let input = json!({
+            "prompt": "a cozy coffee shop",
+            "size": "2K",
+            "watermark": false,
+            "guidance_scale": 3.0,
+        });
+        let body = build_body(&NovitaRequestShape::SeedreamImage, &input).unwrap();
+        assert_eq!(
+            body.get("size").and_then(Value::as_str),
+            Some("2K"),
+            "size must forward"
+        );
+        assert_eq!(
+            body.get("watermark").and_then(Value::as_bool),
+            Some(false),
+            "watermark must forward"
+        );
+        assert!(
+            body.get("guidance_scale").is_none(),
+            "guidance_scale is not a Seedream 4.5/5.0-lite param and must be filtered out"
+        );
+        assert!(
+            body.get("model").is_none(),
+            "only 3.0 injects a fixed model; 4.x/5.x select the checkpoint by URL path"
+        );
+    }
+
+    #[test]
+    fn seedream_requires_a_prompt() {
+        let input = json!({ "size": "2K" });
+        assert!(
+            build_body(&NovitaRequestShape::SeedreamV4TextToImage, &input).is_err(),
+            "Seedream text-to-image must reject a request with no prompt"
         );
     }
 }
