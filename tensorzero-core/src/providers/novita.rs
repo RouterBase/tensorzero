@@ -150,7 +150,8 @@ pub enum NovitaRequestShape {
     ViduQ2ImageToVideo,
     /// Vidu Q2 subject/reference-to-video (shared by `vidu-q2-reference2video`
     /// and `viduq2-pro-fast`). prompt (required), duration (1–10), subjects
-    /// (array of `{id|name, images, voice_id}`, forwarded as-is), resolution,
+    /// (array of `{name, images, voice_id}` — `name` required, prompt refers to a
+    /// subject as `@{name}`; built from `image_urls` when absent), resolution,
     /// aspect_ratio, movement_amplitude, seed, bgm, audio (bool), watermark.
     #[serde(rename = "vidu_q2_subject_to_video")]
     ViduQ2SubjectToVideo,
@@ -674,6 +675,33 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
     {
         if let Some(images) = input.get("image_urls").and_then(Value::as_array) {
             body.insert("images".into(), Value::Array(images.clone()));
+        }
+    }
+
+    // `vidu-q2-reference2video` / `viduq2-pro-fast` take `subjects` instead: a
+    // list of reference subjects that the prompt addresses by name. Novita's
+    // schema is `{name (required), images (<=3), voice_id?}`, and the prompt
+    // references a subject as `@{name}` — so the bare ordinal is the name, and
+    // `name: "1"` is what makes `@1` resolve (NOT `name: "@1"`, which would need
+    // `@@1`).
+    //
+    // Every other media model — and the playground's upload control, and
+    // RouterBase's base64-materialisation / URL-precheck — speaks `image_urls`,
+    // so accept that here too and fan each URL out into its own subject, in
+    // order, so `@N` addresses the Nth image. An explicit `subjects` always
+    // wins, keeping the richer shape (several angles of one subject, `voice_id`)
+    // reachable for callers that need it.
+    if matches!(shape, NovitaRequestShape::ViduQ2SubjectToVideo) && !body.contains_key("subjects") {
+        if let Some(urls) = input.get("image_urls").and_then(Value::as_array) {
+            let subjects: Vec<Value> = urls
+                .iter()
+                .filter(|u| u.is_string())
+                .enumerate()
+                .map(|(i, url)| json!({ "name": (i + 1).to_string(), "images": [url.clone()] }))
+                .collect();
+            if !subjects.is_empty() {
+                body.insert("subjects".into(), Value::Array(subjects));
+            }
         }
     }
 
@@ -1298,8 +1326,48 @@ mod vidu_build_body_tests {
     }
 
     #[test]
+    fn subjects_built_from_image_urls_when_absent() {
+        let input = json!({
+            "prompt": "@1 and @2 shake hands",
+            "duration": 5,
+            "image_urls": ["https://x/a.jpg", "https://x/b.jpg"],
+        });
+        let body = build_body(&NovitaRequestShape::ViduQ2SubjectToVideo, &input).unwrap();
+        assert_eq!(
+            body.get("subjects"),
+            Some(&json!([
+                { "name": "1", "images": ["https://x/a.jpg"] },
+                { "name": "2", "images": ["https://x/b.jpg"] },
+            ])),
+            "each image_url becomes its own subject, in order; Novita requires `name` and \
+             resolves `@{{name}}`, so the bare ordinal is the name and `@N` addresses the Nth image"
+        );
+        assert!(
+            body.get("image_urls").is_none(),
+            "image_urls is a RouterBase-side alias and must not leak to Novita"
+        );
+    }
+
+    #[test]
+    fn explicit_subjects_win_over_image_urls() {
+        let subjects = json!([{ "name": "1", "images": ["https://x/1.jpg", "https://x/2.jpg"] }]);
+        let input = json!({
+            "prompt": "@1 dances",
+            "duration": 5,
+            "subjects": subjects,
+            "image_urls": ["https://x/ignored.jpg"],
+        });
+        let body = build_body(&NovitaRequestShape::ViduQ2SubjectToVideo, &input).unwrap();
+        assert_eq!(
+            body.get("subjects"),
+            Some(&subjects),
+            "an explicit subjects[] must win, so multi-image subjects stay reachable"
+        );
+    }
+
+    #[test]
     fn subjects_passthrough_for_reference_shape() {
-        let subjects = json!([{ "id": "@1", "images": ["https://x/s.jpg"] }]);
+        let subjects = json!([{ "name": "1", "images": ["https://x/s.jpg"] }]);
         let input = json!({ "prompt": "@1 dances", "duration": 5, "subjects": subjects });
         let body = build_body(&NovitaRequestShape::ViduQ2SubjectToVideo, &input).unwrap();
         assert_eq!(
