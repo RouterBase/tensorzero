@@ -286,17 +286,48 @@ fn classify_poll(body: &Value) -> PollOutcome {
     let task = body.get("data").unwrap_or(body);
     match task.get("status").and_then(Value::as_str).unwrap_or("") {
         "succeeded" | "completed" => PollOutcome::Done,
-        "failed" | "error" => {
-            let reason = task
-                .get("error")
-                .and_then(|err| err.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("(no reason given)")
-                .to_string();
-            PollOutcome::Failed(reason)
-        }
+        "failed" | "error" => PollOutcome::Failed(extract_failure_reason(body, task)),
         _ => PollOutcome::Pending,
     }
+}
+
+/// Pull a human-readable failure reason out of an Amux poll response.
+///
+/// The live envelope is `{ code, message, data: { error, status, url } }`, and
+/// `data.error` is `null` while the task runs. Observed failures do NOT always
+/// nest the reason under `data.error.message` (the shape the first cut assumed):
+/// amux may hand back a bare string in `data.error`, an object with `reason`/
+/// `code`, or carry the text in the envelope `message`. Reading only
+/// `data.error.message` collapsed every one of those to "(no reason given)",
+/// which is exactly what users saw. Probe each known location in turn so the
+/// real reason survives, and only fall back when amux genuinely says nothing.
+fn extract_failure_reason(body: &Value, task: &Value) -> String {
+    let non_empty = |v: &Value| {
+        v.as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+
+    // 1) `data.error` as a bare string.
+    if let Some(s) = task.get("error").and_then(&non_empty) {
+        return s;
+    }
+    // 2) `data.error` as an object: message / reason / detail / code.
+    if let Some(err) = task.get("error").filter(|e| e.is_object()) {
+        for key in ["message", "reason", "detail", "code"] {
+            if let Some(s) = err.get(key).and_then(&non_empty) {
+                return s;
+            }
+        }
+    }
+    // 3) Envelope `message` (the `{ code, message }` wrapper) or `data.message`.
+    for candidate in [body.get("message"), task.get("message")] {
+        if let Some(s) = candidate.and_then(&non_empty) {
+            return s;
+        }
+    }
+    "(no reason given)".to_string()
 }
 
 async fn poll_async_result(
@@ -459,6 +490,56 @@ mod tests {
                 "failure reason must come from data.error.message"
             ),
             _ => panic!("nested data.status=failed must classify as Failed"),
+        }
+    }
+
+    #[test]
+    fn classify_poll_reads_bare_string_error() {
+        // Amux hands failure reasons back as a bare string in `data.error`
+        // (not an object), which the message-only probe missed -> "(no reason
+        // given)". The reason string must survive.
+        let body = json!({
+            "code": "success",
+            "data": { "status": "failed", "error": "content policy violation" }
+        });
+        match classify_poll(&body) {
+            PollOutcome::Failed(reason) => assert_eq!(
+                reason, "content policy violation",
+                "a bare-string data.error must be surfaced verbatim"
+            ),
+            _ => panic!("data.status=failed must classify as Failed"),
+        }
+    }
+
+    #[test]
+    fn classify_poll_falls_back_to_envelope_message() {
+        // Failure with a null `data.error` but a populated envelope `message`
+        // (the `{ code, message }` wrapper) must surface that message rather
+        // than collapsing to "(no reason given)".
+        let body = json!({
+            "code": "task_failed",
+            "message": "upstream capacity exceeded",
+            "data": { "status": "failed", "error": null }
+        });
+        match classify_poll(&body) {
+            PollOutcome::Failed(reason) => assert_eq!(
+                reason, "upstream capacity exceeded",
+                "envelope message must be used when data.error is null"
+            ),
+            _ => panic!("data.status=failed must classify as Failed"),
+        }
+    }
+
+    #[test]
+    fn classify_poll_failed_without_any_reason_falls_back() {
+        // Only when amux genuinely provides nothing do we keep the sentinel.
+        let body = json!({ "data": { "status": "failed", "error": null } });
+        match classify_poll(&body) {
+            PollOutcome::Failed(reason) => assert_eq!(
+                reason, "(no reason given)",
+                "absent reason everywhere must fall back to the sentinel"
+            ),
+            _ => panic!("data.status=failed must classify as Failed"),
         }
     }
 
