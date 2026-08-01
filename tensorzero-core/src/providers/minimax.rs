@@ -62,6 +62,12 @@ pub enum MinimaxRequestShape {
     /// `{type:image_url}` block (remapped from `image_urls[0]`).
     #[serde(rename = "minimax_h3_image_to_video")]
     MinimaxH3ImageToVideo,
+    /// MiniMax-H3 reference-to-video (subject/character reference): same
+    /// endpoint plus a `reference_image` `{type:image_url}` block (remapped
+    /// from `image_urls[0]`), so the referenced subject is preserved across
+    /// the whole clip. Differs from image-to-video only in the block `role`.
+    #[serde(rename = "minimax_h3_reference_to_video")]
+    MinimaxH3ReferenceToVideo,
 }
 
 impl MinimaxProvider {
@@ -209,8 +215,15 @@ fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result
 
     let mut content: Vec<Value> = vec![json!({ "type": "text", "text": prompt })];
 
-    // image-to-video: forward the first-frame image URL.
-    if matches!(shape, MinimaxRequestShape::MinimaxH3ImageToVideo) {
+    // image-to-video seeds the opening frame; reference-to-video supplies a
+    // subject/character reference kept across the clip. Both forward the input
+    // image as an `image_url` content block; only the `role` differs.
+    let image_role = match shape {
+        MinimaxRequestShape::MinimaxH3TextToVideo => None,
+        MinimaxRequestShape::MinimaxH3ImageToVideo => Some("first_frame"),
+        MinimaxRequestShape::MinimaxH3ReferenceToVideo => Some("reference_image"),
+    };
+    if let Some(role) = image_role {
         let image = input
             .get("image")
             .and_then(Value::as_str)
@@ -223,13 +236,12 @@ fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result
             })
             .ok_or_else(|| {
                 Error::new(ErrorDetails::InvalidRequest {
-                    message: "MiniMax image-to-video requires an image_urls[0] first frame"
-                        .to_string(),
+                    message: format!("MiniMax {role} video requires an image_urls[0] image URL"),
                 })
             })?;
         content.push(json!({
             "type": "image_url",
-            "role": "first_frame",
+            "role": role,
             "image_url": image,
         }));
     }
@@ -519,6 +531,28 @@ mod tests {
             "the reference image is the first frame"
         );
         assert_eq!(img["image_url"], "https://cdn.example/frame.png");
+    }
+
+    #[test]
+    fn build_body_reference_to_video_adds_reference_image() {
+        let input = json!({
+            "prompt": "the same character walking through a market",
+            "image_urls": ["https://cdn.example/subject.png"],
+            "duration": 6,
+        });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3ReferenceToVideo,
+            "MiniMax-H3",
+            &input,
+        )
+        .unwrap();
+        let img = &body["content"][1];
+        assert_eq!(img["type"], "image_url", "r2v adds an image_url block");
+        assert_eq!(
+            img["role"], "reference_image",
+            "reference-to-video tags the image as a subject reference, not first_frame"
+        );
+        assert_eq!(img["image_url"], "https://cdn.example/subject.png");
     }
 
     #[test]
