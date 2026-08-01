@@ -200,8 +200,8 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 /// Build the `POST /v2/video_generation` body. `model` is the upstream id
 /// carried in `proxy.path` (e.g. `MiniMax-H3`). The prompt becomes a single
 /// `text` content block; image-to-video adds a `first_frame` `image_url`
-/// block. `duration` (integer seconds), `resolution`, and `ratio` are
-/// top-level knobs forwarded from the RouterBase media input.
+/// block. `duration` (integer seconds) and `resolution` forward verbatim;
+/// RouterBase's `aspect_ratio` field is mapped to MiniMax's upstream `ratio`.
 fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result<Value, Error> {
     let prompt = input
         .get("prompt")
@@ -239,10 +239,13 @@ fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result
                     message: format!("MiniMax {role} video requires an image_urls[0] image URL"),
                 })
             })?;
+        // MiniMax's `/v2/video_generation` content blocks take `image_url` as a
+        // NESTED object `{ "url": ... }` (OpenAI-style), NOT a bare string — a
+        // bare string is rejected by the strict upstream parameter whitelist.
         content.push(json!({
             "type": "image_url",
             "role": role,
-            "image_url": image,
+            "image_url": { "url": image },
         }));
     }
 
@@ -263,12 +266,22 @@ fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result
         }
     }
 
-    // Forward the remaining top-level knobs verbatim when present (the
-    // parameter_schema supplies defaults, e.g. resolution=2K, ratio=16:9).
-    for key in ["resolution", "ratio"] {
-        if let Some(value) = input.get(key).filter(|v| !v.is_null()) {
-            body.insert(key.to_string(), value.clone());
-        }
+    // `resolution` forwards verbatim (parameter_schema default e.g. 2K).
+    if let Some(value) = input.get("resolution").filter(|v| !v.is_null()) {
+        body.insert("resolution".into(), value.clone());
+    }
+
+    // Aspect ratio: RouterBase uses the platform-wide `aspect_ratio` field name
+    // (the playground only renders/sends that); MiniMax's upstream field is
+    // `ratio`. Map `aspect_ratio` → `ratio`, falling back to a direct `ratio`
+    // for non-playground callers. t2v requires an explicit, non-`adaptive`
+    // ratio — the schema default supplies one.
+    if let Some(value) = input
+        .get("aspect_ratio")
+        .or_else(|| input.get("ratio"))
+        .filter(|v| !v.is_null())
+    {
+        body.insert("ratio".into(), value.clone());
     }
 
     Ok(Value::Object(body))
@@ -486,7 +499,7 @@ mod tests {
             "prompt": "a cat surfing",
             "duration": "6",
             "resolution": "2K",
-            "ratio": "16:9",
+            "aspect_ratio": "16:9",
         });
         let body = build_body(
             &MinimaxRequestShape::MinimaxH3TextToVideo,
@@ -508,7 +521,26 @@ mod tests {
             "duration must be coerced from string to integer seconds"
         );
         assert_eq!(body["resolution"], "2K");
-        assert_eq!(body["ratio"], "16:9");
+        assert_eq!(
+            body["ratio"], "16:9",
+            "RouterBase aspect_ratio must be forwarded to MiniMax as ratio"
+        );
+    }
+
+    #[test]
+    fn build_body_falls_back_to_direct_ratio() {
+        // Non-playground callers may send `ratio` directly; still honored.
+        let input = json!({ "prompt": "x", "ratio": "9:16" });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3TextToVideo,
+            "MiniMax-H3",
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            body["ratio"], "9:16",
+            "a direct `ratio` must still map through when aspect_ratio is absent"
+        );
     }
 
     #[test]
@@ -530,7 +562,10 @@ mod tests {
             img["role"], "first_frame",
             "the reference image is the first frame"
         );
-        assert_eq!(img["image_url"], "https://cdn.example/frame.png");
+        assert_eq!(
+            img["image_url"]["url"], "https://cdn.example/frame.png",
+            "image_url must be a nested {{url}} object, not a bare string"
+        );
     }
 
     #[test]
@@ -552,7 +587,10 @@ mod tests {
             img["role"], "reference_image",
             "reference-to-video tags the image as a subject reference, not first_frame"
         );
-        assert_eq!(img["image_url"], "https://cdn.example/subject.png");
+        assert_eq!(
+            img["image_url"]["url"], "https://cdn.example/subject.png",
+            "image_url must be a nested {{url}} object, not a bare string"
+        );
     }
 
     #[test]
