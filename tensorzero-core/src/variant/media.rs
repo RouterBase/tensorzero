@@ -36,6 +36,7 @@ use crate::inference::types::{
 use crate::minijinja_util::TemplateConfig;
 use crate::model::ModelTable;
 use crate::providers::amux::{AmuxMediaProxyConfig, AmuxProvider};
+use crate::providers::minimax::{MinimaxMediaProxyConfig, MinimaxProvider};
 use crate::providers::novita::{NovitaMediaProxyConfig, NovitaProvider};
 use crate::relay::TensorzeroRelay;
 
@@ -71,6 +72,7 @@ pub struct MediaConfig {
 pub enum MediaProxyConfig {
     Novita(NovitaMediaProxyConfig),
     Amux(AmuxMediaProxyConfig),
+    Minimax(MinimaxMediaProxyConfig),
 }
 
 impl MediaConfig {
@@ -121,6 +123,16 @@ impl Variant for MediaConfig {
                 }
                 MediaProxyConfig::Amux(proxy) => {
                     AmuxProvider::infer_media_proxy(
+                        proxy,
+                        inference_params.media_generation.callback_url.as_deref(),
+                        &media_input,
+                        &clients.http_client,
+                        &clients.credentials,
+                    )
+                    .await?
+                }
+                MediaProxyConfig::Minimax(proxy) => {
+                    MinimaxProvider::infer_media_proxy(
                         proxy,
                         inference_params.media_generation.callback_url.as_deref(),
                         &media_input,
@@ -197,6 +209,7 @@ impl Variant for MediaConfig {
             let path = match proxy {
                 MediaProxyConfig::Novita(proxy) => &proxy.path,
                 MediaProxyConfig::Amux(proxy) => &proxy.path,
+                MediaProxyConfig::Minimax(proxy) => &proxy.path,
             };
             if path.is_empty() {
                 return Err(ErrorDetails::Config {
