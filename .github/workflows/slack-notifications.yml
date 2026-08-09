@@ -21,7 +21,7 @@ on:
 
 jobs:
   notify-slack:
-    if: github.repository == 'RouterBase/tensorzero'
+    if: github.repository == 'tensorzero/tensorzero'
     runs-on: ubuntu-latest
 
     steps:

@@ -1,0 +1,87 @@
+name: RouterBase Fork CI
+
+# The only CI in this fork that checks the code we actually change.
+#
+# WHY THIS EXISTS
+# ---------------
+# Every other workflow here belongs to upstream tensorzero/tensorzero and is
+# guarded by `github.repository == 'tensorzero/tensorzero'`, so it skips in this
+# fork by design — it needs upstream's Buildkite pipeline, Namespace builders,
+# ClickHouse fixtures and live provider credentials, none of which we have.
+# That left our provider work (Vidu, Seedream, AMUX, MiniMax, Novita) merging on
+# nothing but a CLA bot: PRs #17-#22 never compiled a line of Rust. A break
+# surfaced only later, in RouterBase's own ci.yml, after the submodule pointer
+# had already been bumped on main.
+#
+# SCOPE
+# -----
+# Compile the two crates we ship: tensorzero-core (all the provider code lives
+# here) and gateway (the binary baked into ghcr.io/routerbase/routerbase-gateway
+# by RouterBase's ci.yml). Library and binary targets only — `--all-targets`
+# pulls in upstream's e2e test tree, which expects ClickHouse and real API keys.
+#
+# Deliberately NOT here:
+#  - `-D warnings`: this is a vendored upstream tree we don't own. tensorzero-core
+#    emits 14 clippy warnings on current stable (unfulfilled `#[expect]`s, lints
+#    added after upstream last swept). Denying warnings would make the gate red
+#    on code we have no interest in touching, and would break again on every
+#    toolchain bump. Clippy still runs so the warnings stay visible in the log;
+#    a genuine compile error still fails the job, which is the point.
+#  - `cargo fmt --check`: upstream doesn't enforce rustfmt and the tree isn't
+#    fmt-clean (gateway/src/main.rs import order, ...).
+#  - e2e / live-provider / UI tests: they need upstream's secrets.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: routerbase-fork-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+  # rust-cache reads the Actions cache API.
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # tensorzero-core has compile-time-checked SQL. `.sqlx` is committed at the
+  # workspace root, so the build needs no live Postgres.
+  SQLX_OFFLINE: 1
+
+jobs:
+  build:
+    name: clippy (tensorzero-core + gateway)
+    # Skips in anyone else's fork, the same way upstream's jobs skip in ours.
+    if: github.repository == 'RouterBase/tensorzero'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the compiler that builds the shipped image
+      # (gateway/Dockerfile: cargo-chef:latest-rust-1.88-trixie). Upstream lints
+      # on latest stable, but we care about one thing: does it still build the
+      # way it will be built for production. Latest stable would happily accept
+      # code 1.88 rejects.
+      - name: Install Rust 1.88 with clippy
+        run: |
+          for attempt in 1 2 3; do
+            if rustup toolchain install 1.88.0 --component clippy && rustup default 1.88.0; then
+              break
+            fi
+          done
+          rustc --version
+        shell: bash
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: routerbase-fork-ci
+          # Only rewrite the cache from main, so a red branch can't poison the
+          # baseline every PR builds against.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Clippy
+        run: cargo clippy -p tensorzero-core -p gateway --lib --bins
