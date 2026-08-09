@@ -11,6 +11,10 @@ permissions:
 
 jobs:
   create-pr-feedback:
+    # This job had no repository guard, so it survived the sweep in #23 and
+    # still fails on every closed PR here: it dials upstream's CI bot over
+    # their Tailnet with secrets this fork doesn't have.
+    if: github.repository == 'tensorzero/tensorzero'
     runs-on: ubuntu-latest
     name: Create PR Feedback
     steps:

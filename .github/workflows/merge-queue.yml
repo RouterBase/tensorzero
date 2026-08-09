@@ -131,10 +131,6 @@ jobs:
     if: always() && !failure() && !cancelled() && github.repository == 'tensorzero/tensorzero'
     name: "live-tests (batch_writes: ${{ matrix.batch_writes }})"
     runs-on: ubuntu-latest
-<<<<<<< HEAD
-=======
-    if: github.repository == 'tensorzero/tensorzero'
->>>>>>> f413826b9 (chore: build docker images)
     permissions:
       # Permission to checkout the repository
       contents: read
@@ -265,10 +261,6 @@ jobs:
     if: always() && !failure() && !cancelled() && github.repository == 'tensorzero/tensorzero'
     name: "client-tests (batch_writes: ${{ matrix.batch_writes }})"
     runs-on: ubuntu-latest
-<<<<<<< HEAD
-=======
-    if: github.repository == 'tensorzero/tensorzero'
->>>>>>> f413826b9 (chore: build docker images)
     permissions:
       # Permission to checkout the repository
       contents: read
