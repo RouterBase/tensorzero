@@ -6,7 +6,7 @@ on:
 jobs:
   build-gateway-container:
     runs-on: ubuntu-latest
-    if: github.repository == 'RouterBase/tensorzero'
+    if: github.repository == 'tensorzero/tensorzero'
     permissions:
       contents: read
       id-token: write
