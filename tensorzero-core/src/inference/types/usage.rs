@@ -176,7 +176,30 @@ pub fn aggregate_usage_across_model_inferences<I>(usages: I) -> Usage
 where
     I: IntoIterator<Item = Usage>,
 {
-    usages.into_iter().fold(Usage::zero(), |acc, mi_usage| {
+    // Seed `cached_tokens` with `None`, not `Usage::zero()`'s `Some(0)`.
+    //
+    // `cached_tokens` is a RouterBase addition (fork PR #10, "Preserve OpenAI
+    // cached_tokens"); `input_tokens` / `output_tokens` are upstream's and keep
+    // their `Some(0)` seed, since summing genuinely starts at zero there.
+    //
+    // Seeding cached at `Some(0)` made the match arm below unreachable: the
+    // accumulator was never `None`, so `(None, None)` could not occur and a
+    // provider that reports no cache information aggregated to `Some(0)` --
+    // "zero cached tokens" -- rather than `None` -- "this provider did not say".
+    // That contradicts both the arm's own comment and the function's contract
+    // above ("if any inference has `None` for a field, the aggregated result
+    // for that field is also `None`"), and it broke
+    // `function_config::tests::test_prepare_response_json`, which round-trips a
+    // `Usage { cached_tokens: None }` and asserts it comes back unchanged.
+    //
+    // Billing is unaffected: `cached_tokens` is `skip_serializing_if =
+    // "Option::is_none"`, so `None` omits the field and RouterBase's api
+    // already defaults a missing value to 0.
+    let seed = Usage {
+        cached_tokens: None,
+        ..Usage::zero()
+    };
+    usages.into_iter().fold(seed, |acc, mi_usage| {
         let Usage {
             input_tokens: mi_input_tokens,
             output_tokens: mi_output_tokens,
