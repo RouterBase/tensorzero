@@ -1233,6 +1233,14 @@ fn extract_request_id(headers: &reqwest::header::HeaderMap) -> Option<String> {
     headers
         .get("x-request-id")
         .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        // An upstream that sends `x-request-id:` with an empty (or
+        // whitespace-only) value used to yield `Some("")`, which formats as a
+        // useless `[request_id: ]` suffix on every error -- a correlation id
+        // that correlates nothing, and which users reasonably report as a bug.
+        // Treat it as absent so the suffix is omitted entirely, exactly as it
+        // is when the header is missing.
+        .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
 }
 
@@ -5669,6 +5677,31 @@ mod tests {
             }
             _ => panic!("Expected AllowedTools variant with empty list"),
         }
+    }
+
+    #[test]
+    fn test_extract_request_id_treats_blank_as_absent() {
+        use reqwest::header::{HeaderMap, HeaderValue};
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", HeaderValue::from_static("req_123"));
+        assert_eq!(extract_request_id(&headers), Some("req_123".to_string()));
+
+        // Whitespace is trimmed off an otherwise real id.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", HeaderValue::from_static("  req_456  "));
+        assert_eq!(extract_request_id(&headers), Some("req_456".to_string()));
+
+        // An empty or whitespace-only header must behave exactly like a
+        // missing one, so errors do not carry a `[request_id: ]` suffix that
+        // correlates nothing. Some upstreams send the header unconditionally.
+        for blank in ["", "   "] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-request-id", HeaderValue::from_str(blank).unwrap());
+            assert_eq!(extract_request_id(&headers), None, "blank {blank:?}");
+        }
+
+        assert_eq!(extract_request_id(&HeaderMap::new()), None);
     }
 
     #[test]
