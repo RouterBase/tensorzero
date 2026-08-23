@@ -29,8 +29,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const ASYNC_TASK_TIMEOUT: Duration = Duration::from_secs(3600);
 
 lazy_static! {
-    static ref NOVITA_API_BASE: String =
-        std::env::var("NOVITA_API_BASE").unwrap_or_else(|_| "https://api.novita.ai".to_string());
+    // Empty counts as unset: docker-compose passes `${NOVITA_API_BASE:-}`, and
+    // an empty base yields "relative URL without a base" on every media call
+    // (Amux / MiniMax already filter the same way).
+    static ref NOVITA_API_BASE: String = std::env::var("NOVITA_API_BASE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://api.novita.ai".to_string());
 }
 
 pub struct NovitaProvider;
