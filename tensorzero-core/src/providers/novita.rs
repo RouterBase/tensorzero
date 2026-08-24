@@ -57,8 +57,6 @@ pub struct NovitaMediaProxyConfig {
 pub enum NovitaRequestShape {
     GeminiImageTextToImage,
     GeminiImageEdit,
-    GptImageTextToImage,
-    GptImageEdit,
     /// GPT Image 2 via Novita's OpenAI-compatible "native protocol"
     /// (`/openai/v1/images/generations`, token-billed upstream). Synchronous:
     /// the response carries `data[].b64_json`, no hosted URL. The body `model`
@@ -641,24 +639,6 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "image_urls",
             "image_base64s",
         ],
-        NovitaRequestShape::GptImageTextToImage => &[
-            "size",
-            "n",
-            "quality",
-            "background",
-            "moderation",
-            "output_format",
-            "output_compression",
-        ],
-        NovitaRequestShape::GptImageEdit => &[
-            "size",
-            "n",
-            "quality",
-            "background",
-            "output_format",
-            "image",
-            "mask",
-        ],
         // OAI-native protocol: parameters per OpenAI's Image API. `moderation`
         // is generation-only (Novita documents it as ineffective on edits).
         NovitaRequestShape::GptImageOaiTextToImage => &[
@@ -1118,16 +1098,7 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
         }
     }
 
-    if matches!(shape, NovitaRequestShape::GptImageEdit) && !body.contains_key("image") {
-        if let Some(first) = input
-            .get("image_urls")
-            .and_then(Value::as_array)
-            .and_then(|arr| arr.first())
-        {
-            body.insert("image".into(), first.clone());
-        }
-    }
-
+        // OAI-native protocol: parameters per OpenAI's Image API. `moderation`
     // Kling v3.0 4K I2V + Motion Control: Novita body fields are `image`
     // (single string URL) and, for Motion Control, `video` (single URL).
     // The playground / parameter_schema exposes `image_urls` / `video_urls`
@@ -1319,10 +1290,7 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
 
     if matches!(
         shape,
-        NovitaRequestShape::GptImageTextToImage
-            | NovitaRequestShape::GptImageEdit
-            | NovitaRequestShape::GptImageOaiTextToImage
-            | NovitaRequestShape::GptImageOaiEdit
+        NovitaRequestShape::GptImageOaiTextToImage | NovitaRequestShape::GptImageOaiEdit
     ) {
         let size_label = input
             .get("size")
