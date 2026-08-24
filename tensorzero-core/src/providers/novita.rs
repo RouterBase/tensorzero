@@ -1039,13 +1039,16 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
     }
 
     // The OAI-native GPT Image 2 endpoints share one path per operation and
-    // select the checkpoint via a body `model`. Fixed server-side; switch to
-    // "gpt-image-2-oai" here if that checkpoint is ever preferred.
+    // select the checkpoint via a body `model`. Fixed server-side to
+    // "gpt-image-2-oai": the plain "gpt-image-2" checkpoint rejects
+    // `background: "transparent"` ("Transparent background is not supported
+    // for this model"), while -oai renders true RGBA at identical token
+    // usage (verified 2026-08-24).
     if matches!(
         shape,
         NovitaRequestShape::GptImageOaiTextToImage | NovitaRequestShape::GptImageOaiEdit
     ) {
-        body.insert("model".into(), Value::from("gpt-image-2"));
+        body.insert("model".into(), Value::from("gpt-image-2-oai"));
     }
 
     // Sora 2 routes the Pro/non-Pro distinction through a single Novita
