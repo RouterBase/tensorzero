@@ -57,8 +57,15 @@ pub struct NovitaMediaProxyConfig {
 pub enum NovitaRequestShape {
     GeminiImageTextToImage,
     GeminiImageEdit,
-    GptImageTextToImage,
-    GptImageEdit,
+    /// GPT Image 2 via Novita's OpenAI-compatible "native protocol"
+    /// (`/openai/v1/images/generations`, token-billed upstream). Synchronous:
+    /// the response carries `data[].b64_json`, no hosted URL. The body `model`
+    /// is injected below (`gpt-image-2`; Novita also offers `gpt-image-2-oai`).
+    GptImageOaiTextToImage,
+    /// GPT Image 2 edit via `/openai/v1/images/edits`. multipart/form-data with
+    /// repeated `image[]` file parts (real multi-reference editing, unlike the
+    /// v3 async shape which took a single `image` URL) and an optional `mask`.
+    GptImageOaiEdit,
     /// ByteDance Seedream 3.0 text-to-image. Per `/v3/seedream-3-0-txt2img`:
     /// prompt (required), seed, response_format (url|b64_json), watermark. This
     /// is a SYNCHRONOUS endpoint (returns `image_urls` inline, no task_id). The
@@ -218,6 +225,26 @@ impl NovitaProvider {
         })?;
         let api_key = get_api_key(dynamic_api_keys)?;
         let body = build_body(&proxy.request_shape, input)?;
+
+        // OAI-native GPT Image 2: synchronous OpenAI-compatible endpoints under
+        // /openai/v1 (proxy.path carries the full suffix), b64 response, no
+        // task id. Handled apart from the /v3 flow below.
+        if matches!(
+            proxy.request_shape,
+            NovitaRequestShape::GptImageOaiTextToImage | NovitaRequestShape::GptImageOaiEdit
+        ) {
+            let body_map = body.as_object().cloned().unwrap_or_default();
+            return infer_gpt_image_oai(
+                proxy,
+                callback_url,
+                input,
+                &body_map,
+                http_client,
+                &api_key,
+            )
+            .await;
+        }
+
         let url = format!("{}/v3/{}", *NOVITA_API_BASE, proxy.path)
             .parse::<Url>()
             .map_err(|e| {
@@ -352,6 +379,211 @@ impl NovitaProvider {
     }
 }
 
+/// Synchronous GPT Image 2 call over Novita's OpenAI-compatible protocol.
+///
+/// Generation posts JSON to `{base}/openai/v1/images/generations`; edit posts
+/// multipart/form-data to `{base}/openai/v1/images/edits` with each
+/// `image_urls[]` entry downloaded and re-attached as an `image[]` file part
+/// (plus an optional `mask`). Either way the response is OpenAI-shaped —
+/// `data[].b64_json` — which is delivered to the media callback as `data:`
+/// URIs for RouterBase to decode and mirror to R2.
+async fn infer_gpt_image_oai(
+    proxy: &NovitaMediaProxyConfig,
+    callback_url: &str,
+    input: &Value,
+    body: &serde_json::Map<String, Value>,
+    http_client: &TensorzeroHttpClient,
+    api_key: &SecretString,
+) -> Result<String, Error> {
+    let url = format!("{}/{}", *NOVITA_API_BASE, proxy.path)
+        .parse::<Url>()
+        .map_err(|e| {
+            Error::new(ErrorDetails::InvalidBaseUrl {
+                message: format!("Failed to construct Novita URL: {e}"),
+            })
+        })?;
+
+    let request = http_client
+        .post(url)
+        .bearer_auth(api_key.expose_secret())
+        .timeout(REQUEST_TIMEOUT);
+    let request = if matches!(proxy.request_shape, NovitaRequestShape::GptImageOaiEdit) {
+        let form = build_gpt_image_oai_form(input, body, http_client).await?;
+        request.multipart(form)
+    } else {
+        request.json(&Value::Object(body.clone()))
+    };
+
+    let response = request.send().await.map_err(|e| {
+        Error::new(ErrorDetails::InferenceClient {
+            message: format!("Novita request failed: {e}"),
+            status_code: e.status(),
+            provider_type: PROVIDER_TYPE.to_string(),
+            raw_request: Some(serde_json::to_string(body).unwrap_or_default()),
+            raw_response: None,
+        })
+    })?;
+
+    let status = response.status();
+    let raw = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(Error::new(ErrorDetails::InferenceServer {
+            message: format!("Novita returned {status}: {raw}"),
+            provider_type: PROVIDER_TYPE.to_string(),
+            raw_request: Some(serde_json::to_string(body).unwrap_or_default()),
+            raw_response: Some(raw),
+        }));
+    }
+
+    let raw_json: Value = serde_json::from_str(&raw).map_err(|e| {
+        Error::new(ErrorDetails::InferenceServer {
+            message: format!("Failed to parse Novita response: {e}"),
+            provider_type: PROVIDER_TYPE.to_string(),
+            raw_request: Some(serde_json::to_string(body).unwrap_or_default()),
+            raw_response: Some(raw.clone()),
+        })
+    })?;
+
+    // Actual token usage from the upstream (token-billed protocol). Logged for
+    // cost reconciliation; RouterBase still charges from its pricing matrix.
+    if let Some(usage) = raw_json.get("usage") {
+        tracing::info!("gpt-image-2 oai usage: {usage}");
+    }
+
+    let mime = match input.get("output_format").and_then(Value::as_str) {
+        Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "image/png",
+    };
+    let urls: Vec<String> = raw_json
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    item.get("b64_json")
+                        .and_then(Value::as_str)
+                        .map(|b64| format!("data:{mime};base64,{b64}"))
+                        .or_else(|| {
+                            item.get("url").and_then(Value::as_str).map(ToString::to_string)
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if urls.is_empty() {
+        return Err(Error::new(ErrorDetails::InferenceServer {
+            message: "Novita completed but returned no image data".to_string(),
+            provider_type: PROVIDER_TYPE.to_string(),
+            raw_request: Some(serde_json::to_string(body).unwrap_or_default()),
+            raw_response: Some(raw_json.to_string()),
+        }));
+    }
+
+    let task_id = format!("novita-{}", Uuid::new_v4());
+    post_media_callback(http_client, callback_url, &task_id, &urls).await?;
+    Ok(task_id)
+}
+
+/// Build the multipart form for `/openai/v1/images/edits`: every string field
+/// already vetted into `body` rides as a text part, and each reference image
+/// (`image_urls`, ≤16 per the OpenAI protocol) plus the optional `mask` URL is
+/// downloaded and attached as a file part.
+async fn build_gpt_image_oai_form(
+    input: &Value,
+    body: &serde_json::Map<String, Value>,
+    http_client: &TensorzeroHttpClient,
+) -> Result<reqwest::multipart::Form, Error> {
+    let mut form = reqwest::multipart::Form::new();
+    for (key, value) in body {
+        let text = match value {
+            Value::String(v) => v.clone(),
+            Value::Number(v) => v.to_string(),
+            Value::Bool(v) => v.to_string(),
+            _ => continue,
+        };
+        form = form.text(key.clone(), text);
+    }
+
+    let image_urls: Vec<&str> = input
+        .get("image_urls")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if image_urls.is_empty() {
+        return Err(Error::new(ErrorDetails::InvalidRequest {
+            message: "gpt-image-2 edit requires at least one reference image".to_string(),
+        }));
+    }
+    for (i, url) in image_urls.iter().enumerate() {
+        let part = download_form_part(http_client, url, &format!("image_{i}.png")).await?;
+        form = form.part("image[]", part);
+    }
+    if let Some(mask_url) = input.get("mask").and_then(Value::as_str) {
+        let part = download_form_part(http_client, mask_url, "mask.png").await?;
+        form = form.part("mask", part);
+    }
+    Ok(form)
+}
+
+/// Fetch one reference asset and wrap it as a multipart file part.
+async fn download_form_part(
+    http_client: &TensorzeroHttpClient,
+    url: &str,
+    filename: &str,
+) -> Result<reqwest::multipart::Part, Error> {
+    let parsed = url.parse::<Url>().map_err(|e| {
+        Error::new(ErrorDetails::InvalidRequest {
+            message: format!("Invalid reference image URL: {e}"),
+        })
+    })?;
+    let response = http_client
+        .get(parsed)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| {
+            Error::new(ErrorDetails::InferenceClient {
+                message: format!("Failed to download reference image: {e}"),
+                status_code: e.status(),
+                provider_type: PROVIDER_TYPE.to_string(),
+                raw_request: None,
+                raw_response: None,
+            })
+        })?;
+    if !response.status().is_success() {
+        return Err(Error::new(ErrorDetails::InvalidRequest {
+            message: format!(
+                "Reference image URL returned {}: {url}",
+                response.status()
+            ),
+        }));
+    }
+    let mime = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/png")
+        .to_string();
+    let bytes = response.bytes().await.map_err(|e| {
+        Error::new(ErrorDetails::InferenceClient {
+            message: format!("Failed to read reference image: {e}"),
+            status_code: None,
+            provider_type: PROVIDER_TYPE.to_string(),
+            raw_request: None,
+            raw_response: None,
+        })
+    })?;
+    reqwest::multipart::Part::bytes(bytes.to_vec())
+        .file_name(filename.to_string())
+        .mime_str(&mime)
+        .map_err(|e| {
+            Error::new(ErrorDetails::InvalidRequest {
+                message: format!("Invalid reference image content-type: {e}"),
+            })
+        })
+}
+
 fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, Error> {
     if let Some(key) = dynamic_api_keys.get("NOVITA_API_KEY") {
         return Ok(SecretString::from(key.expose_secret().to_string()));
@@ -407,7 +639,9 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "image_urls",
             "image_base64s",
         ],
-        NovitaRequestShape::GptImageTextToImage => &[
+        // OAI-native protocol: parameters per OpenAI's Image API. `moderation`
+        // is generation-only (Novita documents it as ineffective on edits).
+        NovitaRequestShape::GptImageOaiTextToImage => &[
             "size",
             "n",
             "quality",
@@ -416,14 +650,14 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "output_format",
             "output_compression",
         ],
-        NovitaRequestShape::GptImageEdit => &[
+        // Text fields of the edit form; `image_urls` / `mask` are downloaded
+        // and attached as file parts by `build_gpt_image_oai_form`, not here.
+        NovitaRequestShape::GptImageOaiEdit => &[
             "size",
             "n",
             "quality",
             "background",
             "output_format",
-            "image",
-            "mask",
         ],
         // `size` and `guidance_scale` are documented Seedream 3.0 params but the
         // Novita checkpoint TASK_FAILs whenever either is present, so they are
@@ -784,6 +1018,19 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
         body.insert("model".into(), Value::from("seedream-3-0-t2i-250415"));
     }
 
+    // The OAI-native GPT Image 2 endpoints share one path per operation and
+    // select the checkpoint via a body `model`. Fixed server-side to
+    // "gpt-image-2-oai": the plain "gpt-image-2" checkpoint rejects
+    // `background: "transparent"` ("Transparent background is not supported
+    // for this model"), while -oai renders true RGBA at identical token
+    // usage (verified 2026-08-24).
+    if matches!(
+        shape,
+        NovitaRequestShape::GptImageOaiTextToImage | NovitaRequestShape::GptImageOaiEdit
+    ) {
+        body.insert("model".into(), Value::from("gpt-image-2-oai"));
+    }
+
     // Sora 2 routes the Pro/non-Pro distinction through a single Novita
     // endpoint with a `professional` body field. Force the value
     // server-side so the user can't accidentally upgrade to Pro by
@@ -851,16 +1098,7 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
         }
     }
 
-    if matches!(shape, NovitaRequestShape::GptImageEdit) && !body.contains_key("image") {
-        if let Some(first) = input
-            .get("image_urls")
-            .and_then(Value::as_array)
-            .and_then(|arr| arr.first())
-        {
-            body.insert("image".into(), first.clone());
-        }
-    }
-
+        // OAI-native protocol: parameters per OpenAI's Image API. `moderation`
     // Kling v3.0 4K I2V + Motion Control: Novita body fields are `image`
     // (single string URL) and, for Motion Control, `video` (single URL).
     // The playground / parameter_schema exposes `image_urls` / `video_urls`
@@ -1052,7 +1290,7 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
 
     if matches!(
         shape,
-        NovitaRequestShape::GptImageTextToImage | NovitaRequestShape::GptImageEdit
+        NovitaRequestShape::GptImageOaiTextToImage | NovitaRequestShape::GptImageOaiEdit
     ) {
         let size_label = input
             .get("size")
