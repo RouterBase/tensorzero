@@ -1,3 +1,5 @@
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use lazy_static::lazy_static;
 use schemars::JsonSchema;
 use secrecy::{ExposeSecret, SecretString};
@@ -465,7 +467,9 @@ async fn infer_gpt_image_oai(
                         .and_then(Value::as_str)
                         .map(|b64| format!("data:{mime};base64,{b64}"))
                         .or_else(|| {
-                            item.get("url").and_then(Value::as_str).map(ToString::to_string)
+                            item.get("url")
+                                .and_then(Value::as_str)
+                                .map(ToString::to_string)
                         })
                 })
                 .collect()
@@ -527,11 +531,23 @@ async fn build_gpt_image_oai_form(
 }
 
 /// Fetch one reference asset and wrap it as a multipart file part.
+///
+/// Accepts both real URLs and inline `data:<mime>;base64,<payload>` URIs —
+/// the latter are decoded locally, because an HTTP GET on a `data:` scheme is
+/// a reqwest builder error ("Failed to download reference image: builder
+/// error for url (data:...)"). Either way the part's content type comes from
+/// `image_part_mime`: origin servers routinely serve images as
+/// `application/octet-stream`, which the upstream rejects ("Invalid file
+/// 'mask': unsupported mimetype") since it only accepts `image/jpeg`,
+/// `image/png`, and `image/webp`.
 async fn download_form_part(
     http_client: &TensorzeroHttpClient,
     url: &str,
     filename: &str,
 ) -> Result<reqwest::multipart::Part, Error> {
+    if let Some(body) = url.strip_prefix("data:") {
+        return data_uri_form_part(body, filename);
+    }
     let parsed = url.parse::<Url>().map_err(|e| {
         Error::new(ErrorDetails::InvalidRequest {
             message: format!("Invalid reference image URL: {e}"),
@@ -553,18 +569,14 @@ async fn download_form_part(
         })?;
     if !response.status().is_success() {
         return Err(Error::new(ErrorDetails::InvalidRequest {
-            message: format!(
-                "Reference image URL returned {}: {url}",
-                response.status()
-            ),
+            message: format!("Reference image URL returned {}: {url}", response.status()),
         }));
     }
-    let mime = response
+    let header_mime = response
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("image/png")
-        .to_string();
+        .map(ToString::to_string);
     let bytes = response.bytes().await.map_err(|e| {
         Error::new(ErrorDetails::InferenceClient {
             message: format!("Failed to read reference image: {e}"),
@@ -574,14 +586,68 @@ async fn download_form_part(
             raw_response: None,
         })
     })?;
+    let mime = image_part_mime(&bytes, header_mime.as_deref());
     reqwest::multipart::Part::bytes(bytes.to_vec())
         .file_name(filename.to_string())
-        .mime_str(&mime)
+        .mime_str(mime)
         .map_err(|e| {
             Error::new(ErrorDetails::InvalidRequest {
                 message: format!("Invalid reference image content-type: {e}"),
             })
         })
+}
+
+/// Decode a `data:<mime>;base64,<payload>` URI (already stripped of the
+/// `data:` prefix) into a multipart file part.
+fn data_uri_form_part(body: &str, filename: &str) -> Result<reqwest::multipart::Part, Error> {
+    let (meta, b64) = body.split_once(',').ok_or_else(|| {
+        Error::new(ErrorDetails::InvalidRequest {
+            message: "Malformed `data:` URI in reference image (missing comma)".to_string(),
+        })
+    })?;
+    if !meta.contains("base64") {
+        return Err(Error::new(ErrorDetails::InvalidRequest {
+            message: "Only base64-encoded `data:` URIs are supported for reference images"
+                .to_string(),
+        }));
+    }
+    let bytes = BASE64_STANDARD.decode(b64.trim()).map_err(|e| {
+        Error::new(ErrorDetails::InvalidRequest {
+            message: format!("Invalid base64 in reference image `data:` URI: {e}"),
+        })
+    })?;
+    let declared = meta.split(';').next().filter(|m| !m.is_empty());
+    let mime = image_part_mime(&bytes, declared);
+    reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename.to_string())
+        .mime_str(mime)
+        .map_err(|e| {
+            Error::new(ErrorDetails::InvalidRequest {
+                message: format!("Invalid reference image content-type: {e}"),
+            })
+        })
+}
+
+/// Pick the content type for an image file part: magic-byte sniff first
+/// (PNG / JPEG / WebP — the formats the upstream accepts), then a declared
+/// `image/*` type, then `image/png` as the last resort. Never returns a
+/// non-image type: a truthful `application/octet-stream` is a guaranteed
+/// upstream rejection, while a sniffable image works regardless of what the
+/// origin server claimed.
+fn image_part_mime<'a>(bytes: &[u8], declared: Option<&'a str>) -> &'a str {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return "image/png";
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return "image/jpeg";
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return "image/webp";
+    }
+    match declared {
+        Some(m) if m.starts_with("image/") => m,
+        _ => "image/png",
+    }
 }
 
 fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, Error> {
@@ -652,13 +718,9 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
         ],
         // Text fields of the edit form; `image_urls` / `mask` are downloaded
         // and attached as file parts by `build_gpt_image_oai_form`, not here.
-        NovitaRequestShape::GptImageOaiEdit => &[
-            "size",
-            "n",
-            "quality",
-            "background",
-            "output_format",
-        ],
+        NovitaRequestShape::GptImageOaiEdit => {
+            &["size", "n", "quality", "background", "output_format"]
+        }
         // `size` and `guidance_scale` are documented Seedream 3.0 params but the
         // Novita checkpoint TASK_FAILs whenever either is present, so they are
         // deliberately NOT forwarded.
@@ -1098,7 +1160,7 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
         }
     }
 
-        // OAI-native protocol: parameters per OpenAI's Image API. `moderation`
+    // OAI-native protocol: parameters per OpenAI's Image API. `moderation`
     // Kling v3.0 4K I2V + Motion Control: Novita body fields are `image`
     // (single string URL) and, for Motion Control, `video` (single URL).
     // The playground / parameter_schema exposes `image_urls` / `video_urls`
@@ -1734,6 +1796,66 @@ mod vidu_build_body_tests {
         assert!(
             build_body(&NovitaRequestShape::SeedreamV4TextToImage, &input).is_err(),
             "Seedream text-to-image must reject a request with no prompt"
+        );
+    }
+
+    #[test]
+    fn image_part_mime_sniffs_magic_bytes_over_declared_type() {
+        let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        assert_eq!(
+            image_part_mime(&png, Some("application/octet-stream")),
+            "image/png",
+            "a sniffable PNG must override an octet-stream content type"
+        );
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0];
+        assert_eq!(
+            image_part_mime(&jpeg, None),
+            "image/jpeg",
+            "JPEG magic bytes must be recognized without a declared type"
+        );
+        let webp = *b"RIFF\x00\x00\x00\x00WEBPVP8 ";
+        assert_eq!(
+            image_part_mime(&webp, Some("image/png")),
+            "image/webp",
+            "WebP magic bytes must win over a wrong declared type"
+        );
+    }
+
+    #[test]
+    fn image_part_mime_falls_back_to_declared_image_type_then_png() {
+        assert_eq!(
+            image_part_mime(b"not an image", Some("image/jpeg")),
+            "image/jpeg",
+            "unsniffable bytes must fall back to a declared image/* type"
+        );
+        assert_eq!(
+            image_part_mime(b"not an image", Some("application/octet-stream")),
+            "image/png",
+            "a non-image declared type must never be forwarded to the upstream"
+        );
+        assert_eq!(
+            image_part_mime(b"not an image", None),
+            "image/png",
+            "no declared type must default to image/png"
+        );
+    }
+
+    #[test]
+    fn data_uri_form_part_decodes_base64_payloads() {
+        // A 1x1 PNG header is enough for the sniffer; the part itself only
+        // needs the decode to succeed.
+        let b64 = base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G']);
+        assert!(
+            data_uri_form_part(&format!("image/png;base64,{b64}"), "image_0.png").is_ok(),
+            "a well-formed base64 data: URI must decode into a form part"
+        );
+        assert!(
+            data_uri_form_part("image/png;base64", "image_0.png").is_err(),
+            "a data: URI without a comma must be rejected as malformed"
+        );
+        assert!(
+            data_uri_form_part("image/png,plaintext", "image_0.png").is_err(),
+            "a non-base64 data: URI must be rejected"
         );
     }
 }
