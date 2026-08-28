@@ -236,15 +236,16 @@ impl NovitaProvider {
             NovitaRequestShape::GptImageOaiTextToImage | NovitaRequestShape::GptImageOaiEdit
         ) {
             let body_map = body.as_object().cloned().unwrap_or_default();
-            return infer_gpt_image_oai(
+            // Submit and return; the generation runs in the background and
+            // reports through the same callback the /v3 flow uses.
+            return Ok(spawn_gpt_image_oai(
                 proxy,
                 callback_url,
                 input,
-                &body_map,
+                body_map,
                 http_client,
                 &api_key,
-            )
-            .await;
+            ));
         }
 
         let url = format!("{}/v3/{}", *NOVITA_API_BASE, proxy.path)
@@ -381,7 +382,82 @@ impl NovitaProvider {
     }
 }
 
-/// Synchronous GPT Image 2 call over Novita's OpenAI-compatible protocol.
+/// Start a GPT Image 2 generation and return its task id immediately.
+///
+/// The OpenAI-native protocol has no task of its own: the upstream call blocks
+/// until the image is encoded, which is 20s-2min. Awaiting that here held the
+/// caller's HTTP connection open for the whole generation and still answered
+/// `status: "pending"`, so the client paid a synchronous cost for an
+/// asynchronous answer -- and any 30s idle timeout between them killed a
+/// request the server went on to complete and bill (RouterBase #284 thread).
+///
+/// So mint the task id up front, hand the work to the background, and deliver
+/// the result through `post_media_callback` exactly as the `/v3` flow does.
+/// The caller returns in the time it takes to spawn.
+fn spawn_gpt_image_oai(
+    proxy: &NovitaMediaProxyConfig,
+    callback_url: &str,
+    input: &Value,
+    body: serde_json::Map<String, Value>,
+    http_client: &TensorzeroHttpClient,
+    api_key: &SecretString,
+) -> String {
+    let task_id = format!("novita-{}", Uuid::new_v4());
+
+    // Everything the background task needs, owned: it outlives this call.
+    let proxy_path = proxy.path.clone();
+    let request_shape = proxy.request_shape.clone();
+    let input_bg = input.clone();
+    let http_client_bg = http_client.clone();
+    let api_key_bg = api_key.expose_secret().to_string();
+    let callback_url_bg = callback_url.to_string();
+    let task_id_bg = task_id.clone();
+
+    spawn_ignoring_shutdown(async move {
+        match infer_gpt_image_oai(
+            &proxy_path,
+            request_shape,
+            &input_bg,
+            &body,
+            &http_client_bg,
+            &SecretString::from(api_key_bg),
+        )
+        .await
+        {
+            Ok(urls) => {
+                if let Err(e) = post_media_callback(
+                    &http_client_bg,
+                    &callback_url_bg,
+                    &task_id_bg,
+                    &urls,
+                )
+                .await
+                {
+                    tracing::error!(
+                        "Failed to deliver success callback for gpt-image task {task_id_bg}: {e}"
+                    );
+                }
+            }
+            Err(e) => {
+                // Same shape as the /v3 failure path: the caller already has
+                // its task id, so the only way to report is the callback.
+                tracing::error!("gpt-image task {task_id_bg} failed: {e}");
+                post_media_callback_failure(
+                    &http_client_bg,
+                    &callback_url_bg,
+                    &task_id_bg,
+                    &e.to_string(),
+                )
+                .await;
+            }
+        }
+    });
+
+    task_id
+}
+
+/// The GPT Image 2 call itself, over Novita's OpenAI-compatible protocol.
+/// Returns the rendered images; the caller owns delivery.
 ///
 /// Generation posts JSON to `{base}/openai/v1/images/generations`; edit posts
 /// multipart/form-data to `{base}/openai/v1/images/edits` with each
@@ -390,14 +466,14 @@ impl NovitaProvider {
 /// `data[].b64_json` — which is delivered to the media callback as `data:`
 /// URIs for RouterBase to decode and mirror to R2.
 async fn infer_gpt_image_oai(
-    proxy: &NovitaMediaProxyConfig,
-    callback_url: &str,
+    proxy_path: &str,
+    request_shape: NovitaRequestShape,
     input: &Value,
     body: &serde_json::Map<String, Value>,
     http_client: &TensorzeroHttpClient,
     api_key: &SecretString,
-) -> Result<String, Error> {
-    let url = format!("{}/{}", *NOVITA_API_BASE, proxy.path)
+) -> Result<Vec<String>, Error> {
+    let url = format!("{}/{}", *NOVITA_API_BASE, proxy_path)
         .parse::<Url>()
         .map_err(|e| {
             Error::new(ErrorDetails::InvalidBaseUrl {
@@ -409,7 +485,7 @@ async fn infer_gpt_image_oai(
         .post(url)
         .bearer_auth(api_key.expose_secret())
         .timeout(REQUEST_TIMEOUT);
-    let request = if matches!(proxy.request_shape, NovitaRequestShape::GptImageOaiEdit) {
+    let request = if matches!(request_shape, NovitaRequestShape::GptImageOaiEdit) {
         let form = build_gpt_image_oai_form(input, body, http_client).await?;
         request.multipart(form)
     } else {
@@ -484,9 +560,7 @@ async fn infer_gpt_image_oai(
         }));
     }
 
-    let task_id = format!("novita-{}", Uuid::new_v4());
-    post_media_callback(http_client, callback_url, &task_id, &urls).await?;
-    Ok(task_id)
+    Ok(urls)
 }
 
 /// Build the multipart form for `/openai/v1/images/edits`: every string field
