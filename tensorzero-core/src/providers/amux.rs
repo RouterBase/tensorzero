@@ -30,7 +30,7 @@ lazy_static! {
     static ref AMUX_API_BASE: String = std::env::var("AMUX_API_BASE")
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://api.amux.ai".to_string());
+        .unwrap_or_else(|| "https://gateway.amux.ai".to_string());
 }
 
 pub struct AmuxProvider;
@@ -40,8 +40,9 @@ pub struct AmuxProvider;
 #[cfg_attr(feature = "ts-bindings", ts(export))]
 pub struct AmuxMediaProxyConfig {
     /// For Amux this carries the upstream model id (e.g.
-    /// `doubao-seedance-2.0`), which is sent in the request body — the
-    /// universal endpoints are fixed, unlike Novita's per-model URL path.
+    /// `bytedance/seedance-2.0`), which is sent in the request body as
+    /// `model` — the v3 tasks endpoint is fixed, unlike Novita's per-model
+    /// URL path.
     pub path: Arc<str>,
     #[serde(default)]
     pub async_submission: bool,
@@ -53,14 +54,16 @@ pub struct AmuxMediaProxyConfig {
 #[cfg_attr(feature = "ts-bindings", ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum AmuxRequestShape {
-    /// Doubao-Seedance 2.0 text-to-video, via the universal endpoint
-    /// `POST /v1/video/generations`: model, prompt, seconds (duration),
-    /// metadata (ratio, resolution, seed). Used by both the standard and
-    /// `-fast` model ids — they differ only by the model in `path`.
+    /// Seedance text-to-video, via the v3 tasks endpoint
+    /// `POST /api/v3/contents/generations/tasks`: model, a `content` array
+    /// carrying the prompt, and top-level `duration`/`resolution`/`ratio`/
+    /// `generate_audio`/`watermark`. Used by both the standard and `-fast`
+    /// model ids — they differ only by the model in `path`.
     #[serde(rename = "seedance2_text_to_video")]
     Seedance2TextToVideo,
-    /// Doubao-Seedance 2.0 image-to-video: same universal endpoint plus an
-    /// `image` first-frame URL (remapped from `image_urls[0]`).
+    /// Seedance image-to-video: same v3 endpoint plus a first-frame
+    /// `{type:"image_url", role:"first_frame"}` content item (remapped from
+    /// `image` / `image_urls[0]`).
     #[serde(rename = "seedance2_image_to_video")]
     Seedance2ImageToVideo,
 }
@@ -80,7 +83,7 @@ impl AmuxProvider {
         })?;
         let api_key = get_api_key(dynamic_api_keys)?;
         let body = build_body(&proxy.request_shape, &proxy.path, input)?;
-        let url = format!("{}/v1/video/generations", *AMUX_API_BASE)
+        let url = format!("{}/api/v3/contents/generations/tasks", *AMUX_API_BASE)
             .parse::<Url>()
             .map_err(|e| {
                 Error::new(ErrorDetails::InvalidBaseUrl {
@@ -173,10 +176,16 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
         })
 }
 
-/// Build the universal `POST /v1/video/generations` body. `model` is the
-/// upstream id carried in `proxy.path`. The duration/resolution/ratio/seed
-/// knobs are forwarded under `metadata` (the universal endpoint's bag of
-/// upstream-specific fields), while `prompt`/`image`/`seconds` are top-level.
+/// Build the `POST /api/v3/contents/generations/tasks` body (Amux's
+/// ByteDance/Ark-native async video endpoint). `model` is the upstream id
+/// carried in `proxy.path` (e.g. `bytedance/seedance-2.0`).
+///
+/// Shape (per the Amux OpenAPI): `prompt` and any input material live in one
+/// `content` array — a `{type:"text", text}` item, plus, for image-to-video,
+/// a `{type:"image_url", url, role:"first_frame"}` item. `resolution`,
+/// `duration` (an INTEGER count of seconds, not the old string `seconds`),
+/// `ratio`, `generate_audio` and `watermark` are top-level. `seed` is not
+/// part of this endpoint and is dropped.
 fn build_body(shape: &AmuxRequestShape, model: &str, input: &Value) -> Result<Value, Error> {
     let prompt = input
         .get("prompt")
@@ -190,54 +199,70 @@ fn build_body(shape: &AmuxRequestShape, model: &str, input: &Value) -> Result<Va
 
     let mut body = serde_json::Map::new();
     body.insert("model".into(), Value::from(model));
-    body.insert("prompt".into(), Value::from(prompt));
 
-    // Duration → universal `seconds` (string, for parity with the rest of the
-    // RouterBase video surface which ships duration as a string).
-    if let Some(duration) = input.get("duration") {
-        let seconds = match duration {
-            Value::String(s) => Some(s.clone()),
-            Value::Number(n) => Some(n.to_string()),
-            _ => None,
-        };
-        if let Some(s) = seconds {
-            body.insert("seconds".into(), Value::from(s));
-        }
-    }
-
-    // image-to-video: forward the first-frame image URL.
+    // `content`: the prompt as a text item, plus the first-frame image for
+    // image-to-video.
+    let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
     if matches!(shape, AmuxRequestShape::Seedance2ImageToVideo) {
-        if let Some(value) = input.get("image").and_then(Value::as_str) {
-            body.insert("image".into(), Value::from(value));
-        } else if let Some(first) = input
-            .get("image_urls")
-            .and_then(Value::as_array)
-            .and_then(|arr| arr.first())
+        let first_frame = input
+            .get("image")
             .and_then(Value::as_str)
-        {
-            body.insert("image".into(), Value::from(first));
-        }
+            .or_else(|| {
+                input
+                    .get("image_urls")
+                    .and_then(Value::as_array)
+                    .and_then(|arr| arr.first())
+                    .and_then(Value::as_str)
+            })
+            .ok_or_else(|| {
+                Error::new(ErrorDetails::InvalidRequest {
+                    message: "Amux image-to-video requires a first-frame image URL".to_string(),
+                })
+            })?;
+        content.push(serde_json::json!({
+            "type": "image_url",
+            "url": first_frame,
+            "role": "first_frame",
+        }));
+    }
+    body.insert("content".into(), Value::Array(content));
+
+    // Duration → integer `duration` (seconds). Accept a numeric or a numeric
+    // string from the RouterBase video surface, which ships duration as a
+    // string; a non-numeric value is simply omitted (upstream default).
+    if let Some(seconds) = input.get("duration").and_then(|d| match d {
+        Value::Number(n) => n.as_i64(),
+        Value::String(s) => s.trim().parse::<i64>().ok(),
+        _ => None,
+    }) {
+        body.insert("duration".into(), Value::from(seconds));
     }
 
-    // Upstream-specific knobs ride in `metadata`.
-    let mut metadata = serde_json::Map::new();
-    for key in ["ratio", "resolution", "seed", "generate_audio", "watermark"] {
+    // Top-level upstream knobs (renamed off the old `metadata` bag). `seed`
+    // is intentionally omitted — the v3 endpoint has no such field.
+    for key in ["resolution", "ratio", "generate_audio", "watermark"] {
         if let Some(value) = input.get(key) {
-            metadata.insert(key.to_string(), value.clone());
+            body.insert(key.to_string(), value.clone());
         }
-    }
-    if !metadata.is_empty() {
-        body.insert("metadata".into(), Value::Object(metadata));
     }
 
     Ok(Value::Object(body))
 }
 
-/// Extract the result video URL from a completed universal status response.
-/// The completed shape is `{ status: "completed", url: "…mp4", … }`, with the
-/// URL at the root `url` field; tolerate a few common nestings too.
+/// Extract the result video URL from a completed task response.
+/// The v3 completed shape is `{ status: "succeeded", content: { video_url },
+/// … }`, so the URL lives at `content.video_url`; tolerate a few common
+/// nestings (and the legacy root `url`) for defensiveness.
 fn parse_urls(body: &Value) -> Vec<String> {
-    // Root-level `url` (the documented universal completed shape).
+    // v3 completed shape: `content.video_url`.
+    if let Some(url) = body
+        .get("content")
+        .and_then(|c| c.get("video_url"))
+        .and_then(Value::as_str)
+    {
+        return vec![url.to_string()];
+    }
+    // Root-level `url` (legacy universal shape).
     if let Some(url) = body.get("url").and_then(Value::as_str) {
         return vec![url.to_string()];
     }
@@ -277,16 +302,23 @@ enum PollOutcome {
 
 /// Classify an Amux poll response into a terminal/pending state.
 ///
-/// The universal poll endpoint wraps the task under `data`:
-/// `{ code, message, data: { status, url, error } }`. We read the status from
-/// there, falling back to the root so a flat shape still works. Amux reports
-/// terminal success as `"succeeded"` (not `"completed"`) and failure as
-/// `"failed"`; both spellings of success/failure are accepted defensively.
+/// The v3 poll endpoint returns the task at the root:
+/// `{ id, model, status, content: { video_url }, usage, error }`. `status` is
+/// one of `queued`/`running`/`succeeded`/`failed`/`cancelled`/`expired`. We
+/// still fall back to a `data`-nested status so a legacy/flat shape keeps
+/// working, and accept `completed`/`error` spellings defensively.
 fn classify_poll(body: &Value) -> PollOutcome {
     let task = body.get("data").unwrap_or(body);
-    match task.get("status").and_then(Value::as_str).unwrap_or("") {
+    let status = task
+        .get("status")
+        .or_else(|| body.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    match status {
         "succeeded" | "completed" => PollOutcome::Done,
-        "failed" | "error" => PollOutcome::Failed(extract_failure_reason(body, task)),
+        "failed" | "error" | "cancelled" | "expired" => {
+            PollOutcome::Failed(extract_failure_reason(body, task))
+        }
         _ => PollOutcome::Pending,
     }
 }
@@ -335,7 +367,10 @@ async fn poll_async_result(
     api_key: &str,
     task_id: &str,
 ) -> Result<Value, Error> {
-    let url = format!("{}/v1/video/generations/{task_id}", *AMUX_API_BASE);
+    let url = format!(
+        "{}/api/v3/contents/generations/tasks/{task_id}",
+        *AMUX_API_BASE
+    );
     let deadline = Instant::now() + ASYNC_TASK_TIMEOUT;
     let poll_interval = Duration::from_secs(4);
 
@@ -575,6 +610,127 @@ mod tests {
             parse_urls(&body),
             vec!["https://cdn.amux.ai/x.mp4".to_string()],
             "the completed video URL must be extracted from data.url"
+        );
+    }
+
+    // ── v3 tasks endpoint (`/api/v3/contents/generations/tasks`) shape ──
+
+    #[test]
+    fn classify_poll_detects_v3_root_succeeded() {
+        // The v3 poll shape puts status and content at the root, with the
+        // result at content.video_url.
+        let body = json!({
+            "id": "task_1", "model": "bytedance/seedance-2.0", "status": "succeeded",
+            "content": { "video_url": "https://cdn.amux.ai/v3.mp4" }
+        });
+        assert!(
+            matches!(classify_poll(&body), PollOutcome::Done),
+            "v3 root status=succeeded must classify as Done"
+        );
+    }
+
+    #[test]
+    fn classify_poll_treats_cancelled_and_expired_as_failed() {
+        for status in ["cancelled", "expired"] {
+            let body = json!({ "status": status, "error": "task did not finish" });
+            match classify_poll(&body) {
+                PollOutcome::Failed(reason) => assert_eq!(
+                    reason, "task did not finish",
+                    "v3 terminal status={status:?} must be Failed with its reason"
+                ),
+                _ => panic!("v3 status={status:?} must classify as Failed"),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_urls_reads_v3_content_video_url() {
+        let body = json!({
+            "status": "succeeded",
+            "content": { "video_url": "https://cdn.amux.ai/v3.mp4" }
+        });
+        assert_eq!(
+            parse_urls(&body),
+            vec!["https://cdn.amux.ai/v3.mp4".to_string()],
+            "the v3 result URL must be read from content.video_url"
+        );
+    }
+
+    #[test]
+    fn build_body_t2v_uses_content_array_and_integer_duration() {
+        let input = json!({
+            "prompt": "a cat", "duration": "5", "resolution": "1080p",
+            "ratio": "16:9", "seed": 42, "generate_audio": true
+        });
+        let body = build_body(
+            &AmuxRequestShape::Seedance2TextToVideo,
+            "bytedance/seedance-2.0",
+            &input,
+        )
+        .expect("t2v body builds");
+        assert_eq!(
+            body["model"],
+            json!("bytedance/seedance-2.0"),
+            "model is the upstream id"
+        );
+        assert_eq!(
+            body["content"],
+            json!([{ "type": "text", "text": "a cat" }]),
+            "prompt rides in a single text content item"
+        );
+        assert_eq!(
+            body["duration"],
+            json!(5),
+            "duration is an integer, not the string \"5\""
+        );
+        assert_eq!(
+            body["resolution"],
+            json!("1080p"),
+            "resolution is top-level"
+        );
+        assert_eq!(body["ratio"], json!("16:9"), "ratio is top-level");
+        assert_eq!(
+            body["generate_audio"],
+            json!(true),
+            "generate_audio is top-level"
+        );
+        assert!(
+            body.get("seed").is_none(),
+            "seed is dropped — the v3 endpoint has no such field"
+        );
+        assert!(body.get("metadata").is_none(), "no legacy metadata bag");
+    }
+
+    #[test]
+    fn build_body_i2v_appends_first_frame_image_item() {
+        let input = json!({ "prompt": "walk", "image_urls": ["https://x/first.png"] });
+        let body = build_body(
+            &AmuxRequestShape::Seedance2ImageToVideo,
+            "bytedance/seedance-2.0",
+            &input,
+        )
+        .expect("i2v body builds");
+        assert_eq!(
+            body["content"],
+            json!([
+                { "type": "text", "text": "walk" },
+                { "type": "image_url", "url": "https://x/first.png", "role": "first_frame" }
+            ]),
+            "i2v adds a first_frame image_url content item after the text"
+        );
+    }
+
+    #[test]
+    fn build_body_i2v_without_image_is_rejected() {
+        let input = json!({ "prompt": "walk" });
+        assert!(
+            build_body(
+                &AmuxRequestShape::Seedance2ImageToVideo,
+                "bytedance/seedance-2.0",
+                &input
+            )
+            .is_err(),
+            "image-to-video without a first-frame URL must be a clean error"
         );
     }
 }
