@@ -184,8 +184,8 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 /// `content` array — a `{type:"text", text}` item, plus, for image-to-video,
 /// a `{type:"image_url", url, role:"first_frame"}` item. `resolution`,
 /// `duration` (an INTEGER count of seconds, not the old string `seconds`),
-/// `ratio`, `generate_audio` and `watermark` are top-level. `seed` is not
-/// part of this endpoint and is dropped.
+/// `ratio`, `generate_audio`, `watermark` and (2.5 only) `output_format` are
+/// top-level. `seed` is not part of this endpoint and is dropped.
 fn build_body(shape: &AmuxRequestShape, model: &str, input: &Value) -> Result<Value, Error> {
     let prompt = input
         .get("prompt")
@@ -240,7 +240,16 @@ fn build_body(shape: &AmuxRequestShape, model: &str, input: &Value) -> Result<Va
 
     // Top-level upstream knobs (renamed off the old `metadata` bag). `seed`
     // is intentionally omitted — the v3 endpoint has no such field.
-    for key in ["resolution", "ratio", "generate_audio", "watermark"] {
+    // `output_format` (mp4/mov) exists only on bytedance/seedance-2.5; it is
+    // forwarded when present, and the 2.0 models never receive it because
+    // their RouterBase parameter_schema does not offer the field.
+    for key in [
+        "resolution",
+        "ratio",
+        "generate_audio",
+        "watermark",
+        "output_format",
+    ] {
         if let Some(value) = input.get(key) {
             body.insert(key.to_string(), value.clone());
         }
@@ -699,6 +708,37 @@ mod tests {
             "seed is dropped — the v3 endpoint has no such field"
         );
         assert!(body.get("metadata").is_none(), "no legacy metadata bag");
+    }
+
+    #[test]
+    fn build_body_forwards_output_format_when_present() {
+        // `output_format` is a Seedance 2.5-only knob (mp4/mov); it must ride
+        // along at the top level like the other passthrough keys.
+        let input = serde_json::json!({
+            "prompt": "a cat",
+            "resolution": "1080p",
+            "output_format": "mov",
+        });
+        let body = build_body(
+            &AmuxRequestShape::Seedance2TextToVideo,
+            "bytedance/seedance-2.5",
+            &input,
+        )
+        .expect("body builds");
+        assert_eq!(body["output_format"], serde_json::json!("mov"));
+        assert_eq!(body["resolution"], serde_json::json!("1080p"));
+    }
+
+    #[test]
+    fn build_body_omits_output_format_when_absent() {
+        let input = serde_json::json!({ "prompt": "a cat" });
+        let body = build_body(
+            &AmuxRequestShape::Seedance2TextToVideo,
+            "bytedance/seedance-2.0",
+            &input,
+        )
+        .expect("body builds");
+        assert!(body.get("output_format").is_none());
     }
 
     #[test]
