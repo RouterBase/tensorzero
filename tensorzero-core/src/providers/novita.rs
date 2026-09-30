@@ -50,6 +50,11 @@ pub struct NovitaMediaProxyConfig {
     #[serde(default)]
     pub async_submission: bool,
     pub request_shape: NovitaRequestShape,
+    /// Upstream body `model` for the OAI-native GPT Image shapes, so one shape
+    /// serves several checkpoints (`gpt-image-2.5-flare-oai`, …). Unset keeps
+    /// the shape's default (`gpt-image-2-oai`). Ignored by the other shapes.
+    #[serde(default)]
+    pub model: Option<Arc<str>>,
 }
 
 #[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
@@ -235,7 +240,10 @@ impl NovitaProvider {
             proxy.request_shape,
             NovitaRequestShape::GptImageOaiTextToImage | NovitaRequestShape::GptImageOaiEdit
         ) {
-            let body_map = body.as_object().cloned().unwrap_or_default();
+            let mut body_map = body.as_object().cloned().unwrap_or_default();
+            if let Some(model) = &proxy.model {
+                body_map.insert("model".into(), Value::from(model.as_ref()));
+            }
             return infer_gpt_image_oai(
                 proxy,
                 callback_url,
@@ -338,6 +346,7 @@ impl NovitaProvider {
                             &callback_url_bg,
                             &task_id_bg,
                             &urls,
+                            None,
                         )
                         .await
                         {
@@ -376,7 +385,7 @@ impl NovitaProvider {
             }));
         }
 
-        post_media_callback(http_client, callback_url, &task_id, &urls).await?;
+        post_media_callback(http_client, callback_url, &task_id, &urls, None).await?;
         Ok(task_id)
     }
 }
@@ -446,10 +455,12 @@ async fn infer_gpt_image_oai(
         })
     })?;
 
-    // Actual token usage from the upstream (token-billed protocol). Logged for
-    // cost reconciliation; RouterBase still charges from its pricing matrix.
-    if let Some(usage) = raw_json.get("usage") {
-        tracing::info!("gpt-image-2 oai usage: {usage}");
+    // Actual token usage from the upstream (token-billed protocol). Forwarded
+    // on the success callback: models that opt into usage billing are charged
+    // from it; the rest keep their pricing matrix and ignore it.
+    let usage = raw_json.get("usage");
+    if let Some(usage) = usage {
+        tracing::info!("gpt-image oai usage: {usage}");
     }
 
     let mime = match input.get("output_format").and_then(Value::as_str) {
@@ -485,7 +496,7 @@ async fn infer_gpt_image_oai(
     }
 
     let task_id = format!("novita-{}", Uuid::new_v4());
-    post_media_callback(http_client, callback_url, &task_id, &urls).await?;
+    post_media_callback(http_client, callback_url, &task_id, &urls, usage).await?;
     Ok(task_id)
 }
 
@@ -1501,18 +1512,16 @@ async fn poll_async_result(
     }
 }
 
-async fn post_media_callback(
-    http_client: &TensorzeroHttpClient,
-    callback_url: &str,
+/// Success payload for RouterBase's media callback. `usage` is the upstream's
+/// OpenAI-style token usage when it reports one (OAI-native GPT Image); it rides
+/// at the top level and under `data`, like the other fields.
+fn media_callback_success_body(
     task_id: &str,
+    result_json: &str,
     urls: &[String],
-) -> Result<(), Error> {
-    let result_json = serde_json::to_string(&json!({ "resultUrls": urls })).map_err(|e| {
-        Error::new(ErrorDetails::Serialization {
-            message: format!("Failed to serialize callback payload: {e}"),
-        })
-    })?;
-    let body = json!({
+    usage: Option<&Value>,
+) -> Value {
+    let mut body = json!({
         "taskId": task_id,
         "task_id": task_id,
         "state": "success",
@@ -1525,6 +1534,26 @@ async fn post_media_callback(
             "resultUrls": urls,
         }
     });
+    if let Some(usage) = usage {
+        body["usage"] = usage.clone();
+        body["data"]["usage"] = usage.clone();
+    }
+    body
+}
+
+async fn post_media_callback(
+    http_client: &TensorzeroHttpClient,
+    callback_url: &str,
+    task_id: &str,
+    urls: &[String],
+    usage: Option<&Value>,
+) -> Result<(), Error> {
+    let result_json = serde_json::to_string(&json!({ "resultUrls": urls })).map_err(|e| {
+        Error::new(ErrorDetails::Serialization {
+            message: format!("Failed to serialize callback payload: {e}"),
+        })
+    })?;
+    let body = media_callback_success_body(task_id, &result_json, urls, usage);
     let response = http_client
         .post(callback_url)
         .json(&body)
@@ -1857,5 +1886,46 @@ mod vidu_build_body_tests {
             data_uri_form_part("image/png,plaintext", "image_0.png").is_err(),
             "a non-base64 data: URI must be rejected"
         );
+    }
+}
+
+#[cfg(test)]
+mod gpt_image_usage_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn success_callback_carries_usage_when_present() {
+        let usage = json!({"input_tokens": 451, "output_tokens": 1413});
+        let urls = vec!["data:image/png;base64,AAAA".to_string()];
+        let body = media_callback_success_body("novita-1", "{}", &urls, Some(&usage));
+        assert_eq!(body["usage"], usage);
+        assert_eq!(body["data"]["usage"], usage);
+        assert_eq!(body["state"], "success");
+        assert_eq!(body["resultUrls"], json!(urls));
+    }
+
+    #[test]
+    fn success_callback_omits_usage_when_absent() {
+        let body = media_callback_success_body("novita-1", "{}", &[], None);
+        assert!(body.get("usage").is_none());
+        assert!(body["data"].get("usage").is_none());
+    }
+
+    #[test]
+    fn proxy_model_is_optional() {
+        let with: NovitaMediaProxyConfig = serde_json::from_value(json!({
+            "path": "openai/v1/images/generations",
+            "request_shape": "gpt_image_oai_text_to_image",
+            "model": "gpt-image-2.5-flare-oai"
+        }))
+        .unwrap();
+        assert_eq!(with.model.as_deref(), Some("gpt-image-2.5-flare-oai"));
+        let without: NovitaMediaProxyConfig = serde_json::from_value(json!({
+            "path": "openai/v1/images/generations",
+            "request_shape": "gpt_image_oai_text_to_image"
+        }))
+        .unwrap();
+        assert!(without.model.is_none());
     }
 }
