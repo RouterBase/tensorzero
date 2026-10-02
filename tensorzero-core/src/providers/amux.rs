@@ -182,7 +182,7 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 ///
 /// Shape (per the Amux OpenAPI): `prompt` and any input material live in one
 /// `content` array — a `{type:"text", text}` item, plus, for image-to-video,
-/// a `{type:"image_url", url, role:"first_frame"}` item. `resolution`,
+/// a `{type:"image_url", image_url:{url}, role:"first_frame"}` item. `resolution`,
 /// `duration` (an INTEGER count of seconds, not the old string `seconds`),
 /// `ratio`, `generate_audio`, `watermark` and (2.5 only) `output_format` are
 /// top-level. `seed` is not part of this endpoint and is dropped.
@@ -221,7 +221,7 @@ fn build_body(shape: &AmuxRequestShape, model: &str, input: &Value) -> Result<Va
             })?;
         content.push(serde_json::json!({
             "type": "image_url",
-            "url": first_frame,
+            "image_url": { "url": first_frame },
             "role": "first_frame",
         }));
     }
@@ -754,10 +754,65 @@ mod tests {
             body["content"],
             json!([
                 { "type": "text", "text": "walk" },
-                { "type": "image_url", "url": "https://x/first.png", "role": "first_frame" }
+                { "type": "image_url", "image_url": { "url": "https://x/first.png" }, "role": "first_frame" }
             ]),
             "i2v adds a first_frame image_url content item after the text"
         );
+    }
+
+    #[test]
+    fn build_body_i2v_accepts_single_image_url() {
+        let body = build_body(
+            &AmuxRequestShape::Seedance2ImageToVideo,
+            "bytedance/seedance-2.0",
+            &json!({ "prompt": "walk", "image": "https://x/first.png" }),
+        )
+        .expect("i2v body builds from a single image URL");
+        assert_eq!(
+            body["content"][1],
+            json!({
+                "type": "image_url",
+                "image_url": { "url": "https://x/first.png" },
+                "role": "first_frame"
+            }),
+            "both image input forms must produce the nested upstream media shape"
+        );
+    }
+
+    #[test]
+    fn build_body_preserves_boolean_watermark_and_480p() {
+        for model in ["bytedance/seedance-2.0", "bytedance/seedance-2.0-fast"] {
+            for watermark in [false, true] {
+                let body = build_body(
+                    &AmuxRequestShape::Seedance2TextToVideo,
+                    model,
+                    &json!({
+                        "prompt": "walk",
+                        "watermark": watermark,
+                        "generate_audio": false,
+                        "resolution": "480p",
+                        "duration": 4
+                    }),
+                )
+                .expect("documented Seedance parameters build");
+                assert_eq!(
+                    body["watermark"],
+                    json!(watermark),
+                    "watermark stays boolean"
+                );
+                assert_eq!(
+                    body["generate_audio"],
+                    json!(false),
+                    "false audio is retained"
+                );
+                assert_eq!(
+                    body["resolution"],
+                    json!("480p"),
+                    "480p is forwarded unchanged"
+                );
+                assert_eq!(body["duration"], json!(4), "duration stays integer");
+            }
+        }
     }
 
     #[test]
