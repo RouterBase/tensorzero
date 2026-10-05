@@ -39,9 +39,15 @@ use uuid::Uuid;
 #[clap(rename_all = "snake_case")]
 pub enum CacheEnabledMode {
     On,
+    // RouterBase fork: default Off (upstream: WriteOnly). Write-only stores
+    // every response in ModelInferenceCache and never reads it back unless a
+    // request opts in; RouterBase never does, so prod had 0 cache hits out of
+    // 2.7M inferences while the table grew to 14.6 GiB and its inserts added
+    // ClickHouse memory pressure. Requests can still set `cache_options` to
+    // `on`, `read_only` or `write_only` explicitly.
+    #[default]
     Off,
     ReadOnly,
-    #[default]
     WriteOnly,
 }
 
