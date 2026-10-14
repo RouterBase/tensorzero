@@ -64,6 +64,15 @@ pub struct NovitaMediaProxyConfig {
 pub enum NovitaRequestShape {
     GeminiImageTextToImage,
     GeminiImageEdit,
+    /// Gemini image models served only on Novita's Gemini-native protocol
+    /// (`{base}/gemini/v1beta/models/{model}:generateContent`, `proxy.path`
+    /// carries that suffix), e.g. Nano Banana 2.1. Synchronous: the image comes
+    /// back inline (`inlineData`) with `usageMetadata`, which is forwarded as
+    /// OpenAI-style `usage` for token billing.
+    GeminiNativeTextToImage,
+    /// Gemini-native edit: as above, with each `image_urls` entry fetched and
+    /// sent inline next to the prompt.
+    GeminiNativeEdit,
     /// GPT Image 2 via Novita's OpenAI-compatible "native protocol"
     /// (`/openai/v1/images/generations`, token-billed upstream). Synchronous:
     /// the response carries `data[].b64_json`, no hosted URL. The body `model`
@@ -253,6 +262,18 @@ impl NovitaProvider {
                 &api_key,
             )
             .await;
+        }
+
+        // Gemini-native image models (Nano Banana 2.1): synchronous
+        // `generateContent` under /gemini/v1beta (proxy.path carries the full
+        // suffix), image inline, no task id.
+        if matches!(
+            proxy.request_shape,
+            NovitaRequestShape::GeminiNativeTextToImage | NovitaRequestShape::GeminiNativeEdit
+        ) {
+            let body_map = body.as_object().cloned().unwrap_or_default();
+            return infer_gemini_native(proxy, callback_url, &body_map, http_client, &api_key)
+                .await;
         }
 
         let url = format!("{}/v3/{}", *NOVITA_API_BASE, proxy.path)
@@ -500,6 +521,300 @@ async fn infer_gpt_image_oai(
     Ok(task_id)
 }
 
+/// Synchronous Gemini-native image call (Nano Banana 2.1) over Novita's
+/// `generateContent` passthrough.
+///
+/// Posts JSON to `{base}/{proxy.path}` (`gemini/v1beta/models/{model}:generateContent`).
+/// The response carries the image as `inlineData`, delivered to the media
+/// callback as a `data:` URI for RouterBase to decode and mirror to R2, plus
+/// `usageMetadata`, forwarded as OpenAI-style `usage` (see `gemini_native_usage`).
+async fn infer_gemini_native(
+    proxy: &NovitaMediaProxyConfig,
+    callback_url: &str,
+    body: &serde_json::Map<String, Value>,
+    http_client: &TensorzeroHttpClient,
+    api_key: &SecretString,
+) -> Result<String, Error> {
+    let url = format!("{}/{}", *NOVITA_API_BASE, proxy.path)
+        .parse::<Url>()
+        .map_err(|e| {
+            Error::new(ErrorDetails::InvalidBaseUrl {
+                message: format!("Failed to construct Novita URL: {e}"),
+            })
+        })?;
+
+    let mut images = Vec::new();
+    if matches!(proxy.request_shape, NovitaRequestShape::GeminiNativeEdit) {
+        let urls: Vec<&str> = body
+            .get("image_urls")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if urls.is_empty() {
+            return Err(Error::new(ErrorDetails::InvalidRequest {
+                message: "Gemini image edit requires at least one reference image".to_string(),
+            }));
+        }
+        for url in urls {
+            images.push(fetch_reference_image(http_client, url).await?);
+        }
+    }
+    let request = build_gemini_native_request(body, &images);
+    // Never log the inlined reference images.
+    let request_summary = Value::Object(body.clone()).to_string();
+
+    let response = http_client
+        .post(url)
+        .bearer_auth(api_key.expose_secret())
+        .json(&request)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| {
+            Error::new(ErrorDetails::InferenceClient {
+                message: format!("Novita request failed: {e}"),
+                status_code: e.status(),
+                provider_type: PROVIDER_TYPE.to_string(),
+                raw_request: Some(request_summary.clone()),
+                raw_response: None,
+            })
+        })?;
+
+    let status = response.status();
+    let raw = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(Error::new(ErrorDetails::InferenceServer {
+            message: format!("Novita returned {status}: {raw}"),
+            provider_type: PROVIDER_TYPE.to_string(),
+            raw_request: Some(request_summary),
+            raw_response: Some(raw),
+        }));
+    }
+
+    let raw_json: Value = serde_json::from_str(&raw).map_err(|e| {
+        Error::new(ErrorDetails::InferenceServer {
+            message: format!("Failed to parse Novita response: {e}"),
+            provider_type: PROVIDER_TYPE.to_string(),
+            raw_request: Some(request_summary.clone()),
+            raw_response: None,
+        })
+    })?;
+
+    let usage = gemini_native_usage(&raw_json);
+    if let Some(usage) = &usage {
+        tracing::info!("gemini-native image usage: {usage}");
+    }
+
+    let urls = gemini_native_images(&raw_json);
+    if urls.is_empty() {
+        return Err(Error::new(ErrorDetails::InferenceServer {
+            message: gemini_native_no_image_message(&raw_json),
+            provider_type: PROVIDER_TYPE.to_string(),
+            raw_request: Some(request_summary),
+            raw_response: None,
+        }));
+    }
+
+    let task_id = format!("novita-{}", Uuid::new_v4());
+    post_media_callback(http_client, callback_url, &task_id, &urls, usage.as_ref()).await?;
+    Ok(task_id)
+}
+
+/// Map the flat RouterBase params onto a `generateContent` request.
+///
+/// - `size` (or the api's default `resolution`) → `imageConfig.imageSize` when
+///   it is a Gemini tier (`1K` / `2K` / `4K`); pixel sizes such as `1024x1024`
+///   from OpenAI-style callers are dropped, leaving the upstream default (1K).
+/// - `aspect_ratio` → `imageConfig.aspectRatio`.
+/// - `thinking_level` (`minimal` / `medium` / `high`) → `thinkingConfig.thinkingLevel`.
+/// - `web_search` / `image_search` → one `google_search` tool with those
+///   `searchTypes`.
+///
+/// TEXT is always requested next to IMAGE, so a refusal comes back with the
+/// model's explanation instead of a bare `NO_IMAGE`.
+fn build_gemini_native_request(
+    body: &serde_json::Map<String, Value>,
+    images: &[(Vec<u8>, String)],
+) -> Value {
+    let mut parts = Vec::with_capacity(images.len() + 1);
+    if let Some(prompt) = body.get("prompt").and_then(Value::as_str) {
+        parts.push(json!({ "text": prompt }));
+    }
+    for (bytes, mime) in images {
+        parts.push(json!({
+            "inlineData": { "mimeType": mime, "data": BASE64_STANDARD.encode(bytes) }
+        }));
+    }
+
+    let mut image_config = serde_json::Map::new();
+    let tier = ["size", "resolution"].iter().find_map(|key| {
+        let value = body.get(*key)?.as_str()?.trim().to_uppercase();
+        matches!(value.as_str(), "1K" | "2K" | "4K").then_some(value)
+    });
+    if let Some(tier) = tier {
+        image_config.insert("imageSize".into(), Value::from(tier));
+    }
+    if let Some(ratio) = body.get("aspect_ratio").and_then(Value::as_str) {
+        image_config.insert("aspectRatio".into(), Value::from(ratio));
+    }
+
+    let mut generation_config = serde_json::Map::new();
+    generation_config.insert("responseModalities".into(), json!(["TEXT", "IMAGE"]));
+    if !image_config.is_empty() {
+        generation_config.insert("imageConfig".into(), Value::Object(image_config));
+    }
+    if let Some(level) = body
+        .get("thinking_level")
+        .and_then(Value::as_str)
+        .filter(|l| matches!(*l, "minimal" | "medium" | "high"))
+    {
+        generation_config.insert("thinkingConfig".into(), json!({ "thinkingLevel": level }));
+    }
+
+    let mut request = json!({
+        "contents": [{ "role": "user", "parts": parts }],
+        "generationConfig": generation_config,
+    });
+    let flag = |key: &str| body.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let mut search_types = serde_json::Map::new();
+    if flag("web_search") {
+        search_types.insert("webSearch".into(), json!({}));
+    }
+    if flag("image_search") {
+        search_types.insert("imageSearch".into(), json!({}));
+    }
+    if !search_types.is_empty() {
+        request["tools"] = json!([{ "google_search": { "searchTypes": search_types } }]);
+    }
+    request
+}
+
+/// The final images of a `generateContent` response as `data:` URIs. Interim
+/// images the model drafts while thinking (`thought: true`) are skipped.
+fn gemini_native_images(raw: &Value) -> Vec<String> {
+    raw.get("candidates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.pointer("/content/parts").and_then(Value::as_array))
+        .flatten()
+        .filter(|part| !is_thought(part))
+        .filter_map(|part| {
+            let inline = part.get("inlineData").or_else(|| part.get("inline_data"))?;
+            let data = inline.get("data").and_then(Value::as_str)?;
+            let mime = inline
+                .get("mimeType")
+                .or_else(|| inline.get("mime_type"))
+                .and_then(Value::as_str)
+                .unwrap_or("image/png");
+            Some(format!("data:{mime};base64,{data}"))
+        })
+        .collect()
+}
+
+/// Whether a response part is the model's thinking (`thought: true`), not output.
+fn is_thought(part: &Value) -> bool {
+    part.get("thought")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Error text for a response without an image: the finish reason plus whatever
+/// the model said instead (a refusal is usually explained in a text part).
+fn gemini_native_no_image_message(raw: &Value) -> String {
+    let candidate = raw.pointer("/candidates/0");
+    let reason = candidate
+        .and_then(|c| c.get("finishReason"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            raw.pointer("/promptFeedback/blockReason")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("unknown");
+    let text: Vec<&str> = candidate
+        .and_then(|c| c.pointer("/content/parts"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|part| !is_thought(part))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect();
+    if text.is_empty() {
+        format!("Novita completed but returned no image (finish reason: {reason})")
+    } else {
+        format!(
+            "Novita completed but returned no image (finish reason: {reason}): {}",
+            text.join(" ")
+        )
+    }
+}
+
+/// Gemini `usageMetadata` as the OpenAI-style `usage` RouterBase bills from.
+///
+/// - `input_tokens` = `promptTokenCount`, split into text and everything else
+///   (reference images) via `promptTokensDetails`; `cached_tokens` =
+///   `cachedContentTokenCount`.
+/// - `output_tokens` = `candidatesTokenCount` + `thoughtsTokenCount`, with
+///   `output_tokens_details.image_tokens` the IMAGE share of the candidates
+///   (all of them when the breakdown is missing, so a partial report never
+///   moves image tokens to the cheaper text rate) and `text_tokens` the rest
+///   (text and thinking).
+/// - `search_queries` = the grounding queries the model ran (Google bills
+///   grounding per query).
+fn gemini_native_usage(raw: &Value) -> Option<Value> {
+    let meta = raw.get("usageMetadata")?;
+    let count = |v: &Value, key: &str| v.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let by_modality = |key: &str, modality: &str| -> Option<u64> {
+        let details = meta.get(key)?.as_array()?;
+        Some(
+            details
+                .iter()
+                .filter(|d| d.get("modality").and_then(Value::as_str) == Some(modality))
+                .map(|d| count(d, "tokenCount"))
+                .sum(),
+        )
+    };
+
+    let input = count(meta, "promptTokenCount");
+    let text_in = by_modality("promptTokensDetails", "TEXT")
+        .unwrap_or(input)
+        .min(input);
+    let candidates = count(meta, "candidatesTokenCount");
+    let output = candidates + count(meta, "thoughtsTokenCount");
+    let image_out = by_modality("candidatesTokensDetails", "IMAGE")
+        .unwrap_or(candidates)
+        .min(output);
+    let search_queries: usize = raw
+        .get("candidates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.get("groundingMetadata"))
+        .map(|g| {
+            ["webSearchQueries", "imageSearchQueries"]
+                .iter()
+                .filter_map(|k| g.get(*k).and_then(Value::as_array))
+                .map(Vec::len)
+                .sum::<usize>()
+        })
+        .sum();
+
+    Some(json!({
+        "input_tokens": input,
+        "input_tokens_details": {
+            "text_tokens": text_in,
+            "image_tokens": input - text_in,
+            "cached_tokens": count(meta, "cachedContentTokenCount"),
+        },
+        "output_tokens": output,
+        "output_tokens_details": {
+            "image_tokens": image_out,
+            "text_tokens": output - image_out,
+        },
+        "search_queries": search_queries,
+    }))
+}
+
 /// Build the multipart form for `/openai/v1/images/edits`: every string field
 /// already vetted into `body` rides as a text part, and each reference image
 /// (`image_urls`, ≤16 per the OpenAI protocol) plus the optional `mask` URL is
@@ -542,22 +857,46 @@ async fn build_gpt_image_oai_form(
 }
 
 /// Fetch one reference asset and wrap it as a multipart file part.
-///
-/// Accepts both real URLs and inline `data:<mime>;base64,<payload>` URIs —
-/// the latter are decoded locally, because an HTTP GET on a `data:` scheme is
-/// a reqwest builder error ("Failed to download reference image: builder
-/// error for url (data:...)"). Either way the part's content type comes from
-/// `image_part_mime`: origin servers routinely serve images as
-/// `application/octet-stream`, which the upstream rejects ("Invalid file
-/// 'mask': unsupported mimetype") since it only accepts `image/jpeg`,
-/// `image/png`, and `image/webp`.
 async fn download_form_part(
     http_client: &TensorzeroHttpClient,
     url: &str,
     filename: &str,
 ) -> Result<reqwest::multipart::Part, Error> {
+    let (bytes, mime) = fetch_reference_image(http_client, url).await?;
+    image_form_part(bytes, mime, filename)
+}
+
+fn image_form_part(
+    bytes: Vec<u8>,
+    mime: String,
+    filename: &str,
+) -> Result<reqwest::multipart::Part, Error> {
+    reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename.to_string())
+        .mime_str(&mime)
+        .map_err(|e| {
+            Error::new(ErrorDetails::InvalidRequest {
+                message: format!("Invalid reference image content-type: {e}"),
+            })
+        })
+}
+
+/// Fetch one reference image as `(bytes, mime)`.
+///
+/// Accepts both real URLs and inline `data:<mime>;base64,<payload>` URIs —
+/// the latter are decoded locally, because an HTTP GET on a `data:` scheme is
+/// a reqwest builder error ("Failed to download reference image: builder
+/// error for url (data:...)"). Either way the content type comes from
+/// `image_part_mime`: origin servers routinely serve images as
+/// `application/octet-stream`, which the upstream rejects ("Invalid file
+/// 'mask': unsupported mimetype") since it only accepts `image/jpeg`,
+/// `image/png`, and `image/webp`.
+async fn fetch_reference_image(
+    http_client: &TensorzeroHttpClient,
+    url: &str,
+) -> Result<(Vec<u8>, String), Error> {
     if let Some(body) = url.strip_prefix("data:") {
-        return data_uri_form_part(body, filename);
+        return decode_data_uri(body);
     }
     let parsed = url.parse::<Url>().map_err(|e| {
         Error::new(ErrorDetails::InvalidRequest {
@@ -597,20 +936,13 @@ async fn download_form_part(
             raw_response: None,
         })
     })?;
-    let mime = image_part_mime(&bytes, header_mime.as_deref());
-    reqwest::multipart::Part::bytes(bytes.to_vec())
-        .file_name(filename.to_string())
-        .mime_str(mime)
-        .map_err(|e| {
-            Error::new(ErrorDetails::InvalidRequest {
-                message: format!("Invalid reference image content-type: {e}"),
-            })
-        })
+    let mime = image_part_mime(&bytes, header_mime.as_deref()).to_string();
+    Ok((bytes.to_vec(), mime))
 }
 
 /// Decode a `data:<mime>;base64,<payload>` URI (already stripped of the
-/// `data:` prefix) into a multipart file part.
-fn data_uri_form_part(body: &str, filename: &str) -> Result<reqwest::multipart::Part, Error> {
+/// `data:` prefix) into `(bytes, mime)`.
+fn decode_data_uri(body: &str) -> Result<(Vec<u8>, String), Error> {
     let (meta, b64) = body.split_once(',').ok_or_else(|| {
         Error::new(ErrorDetails::InvalidRequest {
             message: "Malformed `data:` URI in reference image (missing comma)".to_string(),
@@ -628,15 +960,8 @@ fn data_uri_form_part(body: &str, filename: &str) -> Result<reqwest::multipart::
         })
     })?;
     let declared = meta.split(';').next().filter(|m| !m.is_empty());
-    let mime = image_part_mime(&bytes, declared);
-    reqwest::multipart::Part::bytes(bytes)
-        .file_name(filename.to_string())
-        .mime_str(mime)
-        .map_err(|e| {
-            Error::new(ErrorDetails::InvalidRequest {
-                message: format!("Invalid reference image content-type: {e}"),
-            })
-        })
+    let mime = image_part_mime(&bytes, declared).to_string();
+    Ok((bytes, mime))
 }
 
 /// Pick the content type for an image file part: magic-byte sniff first
@@ -715,6 +1040,26 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
             "google",
             "image_urls",
             "image_base64s",
+        ],
+        // Gemini-native: flat RouterBase params, mapped onto `generateContent`
+        // by `build_gemini_native_request` (`resolution` is the api's default
+        // size key). `image_urls` are fetched and inlined there.
+        NovitaRequestShape::GeminiNativeTextToImage => &[
+            "size",
+            "resolution",
+            "aspect_ratio",
+            "thinking_level",
+            "web_search",
+            "image_search",
+        ],
+        NovitaRequestShape::GeminiNativeEdit => &[
+            "size",
+            "resolution",
+            "aspect_ratio",
+            "thinking_level",
+            "web_search",
+            "image_search",
+            "image_urls",
         ],
         // OAI-native protocol: parameters per OpenAI's Image API. `moderation`
         // is generation-only (Novita documents it as ineffective on edits).
@@ -1870,21 +2215,217 @@ mod vidu_build_body_tests {
     }
 
     #[test]
-    fn data_uri_form_part_decodes_base64_payloads() {
-        // A 1x1 PNG header is enough for the sniffer; the part itself only
-        // needs the decode to succeed.
+    fn decode_data_uri_decodes_base64_payloads() {
         let b64 = base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G']);
-        assert!(
-            data_uri_form_part(&format!("image/png;base64,{b64}"), "image_0.png").is_ok(),
-            "a well-formed base64 data: URI must decode into a form part"
+        let (bytes, mime) = decode_data_uri(&format!("image/jpeg;base64,{b64}"))
+            .expect("a well-formed base64 data: URI must decode");
+        assert_eq!(
+            bytes,
+            [0x89, b'P', b'N', b'G'],
+            "payload bytes must round-trip"
+        );
+        assert_eq!(
+            mime, "image/png",
+            "the sniffed PNG signature must win over the declared type"
         );
         assert!(
-            data_uri_form_part("image/png;base64", "image_0.png").is_err(),
+            decode_data_uri("image/png;base64").is_err(),
             "a data: URI without a comma must be rejected as malformed"
         );
         assert!(
-            data_uri_form_part("image/png,plaintext", "image_0.png").is_err(),
+            decode_data_uri("image/png,plaintext").is_err(),
             "a non-base64 data: URI must be rejected"
+        );
+    }
+}
+
+#[cfg(test)]
+mod gemini_native_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn body(value: Value) -> serde_json::Map<String, Value> {
+        value.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn request_maps_flat_params_onto_generate_content() {
+        let request = build_gemini_native_request(
+            &body(json!({
+                "prompt": "a red apple",
+                "size": "2k",
+                "resolution": "1K",
+                "aspect_ratio": "16:9",
+                "thinking_level": "high",
+                "web_search": true,
+                "image_search": false,
+            })),
+            &[(vec![1, 2, 3], "image/jpeg".to_string())],
+        );
+        assert_eq!(
+            request["contents"][0]["parts"],
+            json!([
+                {"text": "a red apple"},
+                {"inlineData": {"mimeType": "image/jpeg", "data": "AQID"}},
+            ]),
+            "the prompt must lead, followed by each reference image inline"
+        );
+        assert_eq!(
+            request["generationConfig"],
+            json!({
+                "responseModalities": ["TEXT", "IMAGE"],
+                "imageConfig": {"imageSize": "2K", "aspectRatio": "16:9"},
+                "thinkingConfig": {"thinkingLevel": "high"},
+            }),
+            "`size` must win over the default `resolution` and be upper-cased"
+        );
+        assert_eq!(
+            request["tools"],
+            json!([{"google_search": {"searchTypes": {"webSearch": {}}}}]),
+            "only the enabled search types must be requested"
+        );
+    }
+
+    #[test]
+    fn request_drops_pixel_sizes_unknown_levels_and_disabled_search() {
+        let request = build_gemini_native_request(
+            &body(json!({
+                "prompt": "x",
+                "size": "1024x1024",
+                "thinking_level": "max",
+            })),
+            &[],
+        );
+        assert!(
+            request["generationConfig"].get("imageConfig").is_none(),
+            "a pixel size is not a Gemini tier and must leave the upstream default"
+        );
+        assert!(
+            request["generationConfig"].get("thinkingConfig").is_none(),
+            "an unsupported thinking level must not be forwarded"
+        );
+        assert!(
+            request.get("tools").is_none(),
+            "no search tool unless a search type is enabled"
+        );
+    }
+
+    #[test]
+    fn images_skip_thought_drafts() {
+        let raw = json!({"candidates": [{"content": {"parts": [
+            {"text": "planning", "thought": true},
+            {"inlineData": {"mimeType": "image/png", "data": "DRAFT"}, "thought": true},
+            {"text": "Here it is"},
+            {"inlineData": {"mimeType": "image/jpeg", "data": "FINAL"}},
+        ]}}]});
+        assert_eq!(
+            gemini_native_images(&raw),
+            vec!["data:image/jpeg;base64,FINAL".to_string()],
+            "only the final, non-thought image must be delivered"
+        );
+    }
+
+    #[test]
+    fn no_image_message_carries_reason_and_text() {
+        let raw = json!({"candidates": [{
+            "finishReason": "NO_IMAGE",
+            "content": {"parts": [
+                {"text": "thinking", "thought": true},
+                {"text": "I can't draw that."},
+            ]},
+        }]});
+        assert_eq!(
+            gemini_native_no_image_message(&raw),
+            "Novita completed but returned no image (finish reason: NO_IMAGE): I can't draw that.",
+            "the error must surface the finish reason and the model's own text"
+        );
+        let empty =
+            json!({"candidates": [{"finishReason": "NO_IMAGE", "content": {"parts": null}}]});
+        assert_eq!(
+            gemini_native_no_image_message(&empty),
+            "Novita completed but returned no image (finish reason: NO_IMAGE)",
+        );
+    }
+
+    #[test]
+    fn usage_splits_image_and_text_output_and_counts_searches() {
+        // Shape observed from gemini-nano-banana-2.1 with web search (2026-10-14).
+        let raw = json!({
+            "candidates": [{"groundingMetadata": {
+                "webSearchQueries": ["tokyo weather", "tokyo forecast"],
+                "imageSearchQueries": ["tokyo skyline"],
+            }}],
+            "usageMetadata": {
+                "promptTokenCount": 1137,
+                "candidatesTokenCount": 1186,
+                "thoughtsTokenCount": 1106,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 17},
+                    {"modality": "IMAGE", "tokenCount": 1120},
+                ],
+                "candidatesTokensDetails": [
+                    {"modality": "IMAGE", "tokenCount": 1120},
+                    {"modality": "TEXT", "tokenCount": 66},
+                ],
+            },
+        });
+        assert_eq!(
+            gemini_native_usage(&raw).unwrap(),
+            json!({
+                "input_tokens": 1137,
+                "input_tokens_details": {"text_tokens": 17, "image_tokens": 1120, "cached_tokens": 0},
+                "output_tokens": 2292,
+                "output_tokens_details": {"image_tokens": 1120, "text_tokens": 1172},
+                "search_queries": 3,
+            }),
+            "thinking and text output must be split from image output"
+        );
+    }
+
+    #[test]
+    fn rendered_proxy_config_selects_the_gemini_native_shapes() {
+        // Exactly what RouterBase's tz_config_render emits for Nano Banana 2.1.
+        for (shape, edit) in [
+            ("gemini_native_text_to_image", false),
+            ("gemini_native_edit", true),
+        ] {
+            let proxy: NovitaMediaProxyConfig = serde_json::from_value(json!({
+                "path": "gemini/v1beta/models/gemini-nano-banana-2.1:generateContent",
+                "request_shape": shape,
+            }))
+            .unwrap();
+            assert_eq!(
+                matches!(proxy.request_shape, NovitaRequestShape::GeminiNativeEdit),
+                edit,
+                "`{shape}` must deserialize to its own variant"
+            );
+            assert!(
+                !proxy.async_submission,
+                "Gemini-native calls are synchronous"
+            );
+        }
+    }
+
+    #[test]
+    fn usage_without_breakdown_bills_candidates_as_image() {
+        let raw = json!({"usageMetadata": {
+            "promptTokenCount": 11,
+            "candidatesTokenCount": 1120,
+            "thoughtsTokenCount": 537,
+        }});
+        let usage = gemini_native_usage(&raw).unwrap();
+        assert_eq!(
+            usage["output_tokens_details"],
+            json!({"image_tokens": 1120, "text_tokens": 537}),
+            "without candidatesTokensDetails every candidate token must stay at the image rate"
+        );
+        assert_eq!(
+            usage["input_tokens_details"]["text_tokens"], 11,
+            "without promptTokensDetails all input counts as text"
+        );
+        assert!(
+            gemini_native_usage(&json!({})).is_none(),
+            "no usageMetadata means no usage"
         );
     }
 }
