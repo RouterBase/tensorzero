@@ -440,6 +440,7 @@ impl InferenceProvider for OpenAIProvider {
         let request_id = extract_request_id(&headers);
 
         if status.is_success() {
+            log_upstream_request_id(request_id.as_deref());
             let raw_response = res.text().await.map_err(|e| {
                 Error::new(ErrorDetails::InferenceServer {
                     message: format!(
@@ -606,6 +607,7 @@ impl InferenceProvider for OpenAIProvider {
                 })?;
 
                 let request_id = extract_request_id(&headers);
+                log_upstream_request_id(request_id.as_deref());
                 let stream = stream_openai_responses(
                     PROVIDER_TYPE.to_string(),
                     model_inference_id,
@@ -661,6 +663,7 @@ impl InferenceProvider for OpenAIProvider {
                 })?;
 
                 let request_id = extract_request_id(&headers);
+                log_upstream_request_id(request_id.as_deref());
                 let stream = stream_openai(
                     PROVIDER_TYPE.to_string(),
                     model_inference_id,
@@ -1227,6 +1230,21 @@ fn get_embedding_url(base_url: &Url) -> Result<Url, Error> {
             message: e.to_string(),
         })
     })
+}
+
+/// Log the upstream's own id for a call it accepted. Errors already carry it
+/// (see `with_request_id`); a successful call otherwise left no trace of it,
+/// so a slow one could not be quoted to the vendor. The enclosing `inference`
+/// span puts the `inference_id` on the same line. Named `upstream_request_id`
+/// because the gateway's own `request` span already prints a `request_id`.
+fn log_upstream_request_id(request_id: Option<&str>) {
+    if let Some(request_id) = request_id {
+        tracing::info!(
+            provider = %PROVIDER_TYPE,
+            upstream_request_id = request_id,
+            "upstream request id"
+        );
+    }
 }
 
 fn extract_request_id(headers: &reqwest::header::HeaderMap) -> Option<String> {
@@ -5677,6 +5695,23 @@ mod tests {
             }
             _ => panic!("Expected AllowedTools variant with empty list"),
         }
+    }
+
+    #[test]
+    fn test_log_upstream_request_id() {
+        let logs_contain = capture_logs();
+        log_upstream_request_id(None);
+        assert!(
+            !logs_contain("upstream request id"),
+            "no line when the upstream sent no `x-request-id`"
+        );
+        log_upstream_request_id(Some("021762ark"));
+        assert!(
+            logs_contain("upstream request id")
+                && logs_contain("upstream_request_id=\"021762ark\""),
+            "an accepted call logs the upstream id: {}",
+            crate::utils::testing::get_captured_logs()
+        );
     }
 
     #[test]
