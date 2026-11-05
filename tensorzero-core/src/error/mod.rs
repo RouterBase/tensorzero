@@ -70,13 +70,16 @@ pub fn warn_discarded_cache_write(raw_response: &str) {
     }
 }
 
+/// Logged at debug level: clients routinely send earlier reasoning back in
+/// multi-turn chats, so dropping it is expected and a warning per request
+/// floods the gateway logs.
 pub fn warn_discarded_thought_block(provider_type: &str, thought: &Thought) {
     if *DEBUG.get().unwrap_or(&false) {
-        tracing::warn!(
+        tracing::debug!(
             "TensorZero doesn't support input thought blocks for the `{provider_type}` provider. Many providers don't support them; if this provider does, please let us know: https://github.com/tensorzero/tensorzero/discussions/categories/feature-requests\n\n{thought:?}"
         );
     } else {
-        tracing::warn!(
+        tracing::debug!(
             "TensorZero doesn't support input thought blocks for the `{provider_type}` provider. Many providers don't support them; if this provider does, please let us know: https://github.com/tensorzero/tensorzero/discussions/categories/feature-requests"
         );
     }
