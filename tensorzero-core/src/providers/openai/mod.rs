@@ -1485,12 +1485,22 @@ pub struct OpenAIInputAudio<'a> {
     format: Cow<'a, str>,
 }
 
+/// Video input in the `video_url` shape OpenAI-compatible multimodal models
+/// accept (Xiaomi MiMo, Qwen-VL, Doubao): an https URL or a base64 data URL.
+/// OpenAI itself has no video input, and these models reject a video sent
+/// as a `file` block.
+#[derive(Clone, Deserialize, Debug, PartialEq, Serialize)]
+pub struct OpenAIVideoUrl {
+    pub url: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum OpenAIContentBlock<'a> {
     Text { text: Cow<'a, str> },
     ImageUrl { image_url: OpenAIImageUrl },
     File { file: OpenAIFile<'a> },
     InputAudio { input_audio: OpenAIInputAudio<'a> },
+    VideoUrl { video_url: OpenAIVideoUrl },
     Unknown { data: Cow<'a, Value> },
 }
 
@@ -1514,6 +1524,9 @@ impl Serialize for OpenAIContentBlock<'_> {
             InputAudio {
                 input_audio: &'a OpenAIInputAudio<'a>,
             },
+            VideoUrl {
+                video_url: &'a OpenAIVideoUrl,
+            },
         }
         match self {
             OpenAIContentBlock::Text { text } => Helper::Text { text }.serialize(serializer),
@@ -1523,6 +1536,9 @@ impl Serialize for OpenAIContentBlock<'_> {
             OpenAIContentBlock::File { file } => Helper::File { file }.serialize(serializer),
             OpenAIContentBlock::InputAudio { input_audio } => {
                 Helper::InputAudio { input_audio }.serialize(serializer)
+            }
+            OpenAIContentBlock::VideoUrl { video_url } => {
+                Helper::VideoUrl { video_url }.serialize(serializer)
             }
             OpenAIContentBlock::Unknown { data } => data.serialize(serializer),
         }
@@ -1625,7 +1641,8 @@ impl OpenAIRequestMessage<'_> {
                 OpenAIContentBlock::Text { text } => text.to_lowercase().contains(value),
                 OpenAIContentBlock::ImageUrl { .. }
                 | OpenAIContentBlock::File { .. }
-                | OpenAIContentBlock::InputAudio { .. } => false,
+                | OpenAIContentBlock::InputAudio { .. }
+                | OpenAIContentBlock::VideoUrl { .. } => false,
                 // Don't inspect the contents of 'unknown' blocks
                 OpenAIContentBlock::Unknown { data: _ } => false,
             }),
@@ -1635,7 +1652,8 @@ impl OpenAIRequestMessage<'_> {
                         OpenAIContentBlock::Text { text } => text.to_lowercase().contains(value),
                         OpenAIContentBlock::ImageUrl { .. }
                         | OpenAIContentBlock::File { .. }
-                        | OpenAIContentBlock::InputAudio { .. } => false,
+                        | OpenAIContentBlock::InputAudio { .. }
+                        | OpenAIContentBlock::VideoUrl { .. } => false,
                         // Don't inspect the contents of 'unknown' blocks
                         OpenAIContentBlock::Unknown { data: _ } => false,
                     })
@@ -1922,6 +1940,26 @@ pub(super) async fn prepare_file_message(
     messages_config: OpenAIMessagesConfig<'_>,
 ) -> Result<OpenAIContentBlock<'static>, Error> {
     match file {
+        // A video URL whose mime type the caller gave is forwarded as is,
+        // like an image URL: the provider fetches it, and a long clip is
+        // never downloaded and base64-encoded here.
+        LazyFile::Url {
+            file_url:
+                FileUrl {
+                    mime_type: Some(mime_type),
+                    url,
+                    ..
+                },
+            future: _,
+        } if !messages_config.fetch_and_encode_input_files_before_inference
+            && mime_type.type_() == mime::VIDEO =>
+        {
+            Ok(OpenAIContentBlock::VideoUrl {
+                video_url: OpenAIVideoUrl {
+                    url: url.to_string(),
+                },
+            })
+        }
         // If we have all of the following:
         // * The user passed in an image URL (not base64-encoded file data)
         // * The user explicitly specified an image mime type
@@ -1995,6 +2033,10 @@ pub(super) async fn prepare_file_message(
                         data: Cow::Owned(data.clone()),
                         format: Cow::Owned(format.to_string()),
                     },
+                })
+            } else if file.mime_type.type_() == mime::VIDEO {
+                Ok(OpenAIContentBlock::VideoUrl {
+                    video_url: OpenAIVideoUrl { url: base64_url },
                 })
             } else {
                 // OpenAI doesn't document how they determine the content type of the base64 blob
@@ -4912,6 +4954,83 @@ mod tests {
         );
 
         assert!(!logs_contain("mime_type"));
+    }
+
+    #[tokio::test]
+    async fn test_forward_video_url() {
+        let url = Url::parse("https://example.com/clip.mp4").unwrap();
+        let res = prepare_file_message(
+            &LazyFile::Url {
+                file_url: FileUrl {
+                    url: url.clone(),
+                    mime_type: Some("video/mp4".parse().unwrap()),
+                    detail: None,
+                    filename: None,
+                },
+                future: async { panic!("File future should not be resolved") }
+                    .boxed()
+                    .shared(),
+            },
+            OpenAIMessagesConfig {
+                json_mode: None,
+                provider_type: PROVIDER_TYPE,
+                fetch_and_encode_input_files_before_inference: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            res,
+            OpenAIContentBlock::VideoUrl {
+                video_url: OpenAIVideoUrl {
+                    url: url.to_string(),
+                },
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&res).unwrap(),
+            json!({"type": "video_url", "video_url": {"url": "https://example.com/clip.mp4"}})
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_base64_video_as_video_url() {
+        let file = LazyFile::Base64(PendingObjectStoreFile(ObjectStorageFile {
+            file: ObjectStoragePointer {
+                source_url: None,
+                mime_type: "video/mp4".parse().unwrap(),
+                storage_path: StoragePath {
+                    kind: StorageKind::Disabled,
+                    path: object_store::path::Path::parse("dummy-path").unwrap(),
+                },
+                detail: None,
+                filename: None,
+            },
+            data: BASE64_STANDARD.encode(b"fake video data"),
+        }));
+        let res = prepare_file_message(
+            &file,
+            OpenAIMessagesConfig {
+                fetch_and_encode_input_files_before_inference: false,
+                json_mode: None,
+                provider_type: PROVIDER_TYPE,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            res,
+            OpenAIContentBlock::VideoUrl {
+                video_url: OpenAIVideoUrl {
+                    url: format!(
+                        "data:video/mp4;base64,{}",
+                        BASE64_STANDARD.encode(b"fake video data")
+                    ),
+                },
+            }
+        );
     }
 
     #[tokio::test]
