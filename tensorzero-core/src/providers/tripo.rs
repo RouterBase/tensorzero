@@ -437,15 +437,16 @@ fn classify_poll(body: &Value) -> PollOutcome {
 }
 
 fn failure_reason(task: &Value) -> String {
-    let status = task.get("status").and_then(Value::as_str).unwrap_or("failed");
-    let message = ["error_message", "message", "error"]
-        .iter()
-        .find_map(|k| {
-            task.get(*k)
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-        });
+    let status = task
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("failed");
+    let message = ["error_message", "message", "error"].iter().find_map(|k| {
+        task.get(*k)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    });
     let code = task.get("error_code").and_then(Value::as_i64);
     match (message, code) {
         (Some(m), Some(c)) => format!("{m} (error {c})"),
@@ -690,8 +691,14 @@ mod tests {
             &input,
         )
         .unwrap();
-        assert_eq!(body["model"], "v3.1-20260211", "model comes from the proxy path");
-        assert_eq!(body["prompt"], "a cat wearing a spacesuit", "prompt is trimmed");
+        assert_eq!(
+            body["model"], "v3.1-20260211",
+            "model comes from the proxy path"
+        );
+        assert_eq!(
+            body["prompt"], "a cat wearing a spacesuit",
+            "prompt is trimmed"
+        );
         assert_eq!(body["negative_prompt"], "blurry");
         assert_eq!(body["texture_quality"], "detailed");
         assert_eq!(body["pbr"], false);
@@ -712,7 +719,10 @@ mod tests {
             "P1-20260311",
             &json!({ "prompt": "   " }),
         );
-        assert!(err.is_err(), "a blank prompt must be rejected before submit");
+        assert!(
+            err.is_err(),
+            "a blank prompt must be rejected before submit"
+        );
     }
 
     #[test]
@@ -725,12 +735,8 @@ mod tests {
             "negative_prompt": "ignored for image tasks",
             "quad": true,
         });
-        let body = build_body(
-            &TripoRequestShape::TripoImageToModel,
-            "P2-20260801",
-            &input,
-        )
-        .unwrap();
+        let body =
+            build_body(&TripoRequestShape::TripoImageToModel, "P2-20260801", &input).unwrap();
         assert_eq!(
             body["input"], "https://cdn.example/chair.png",
             "image_urls[0] must be sent as Tripo's string `input`"
@@ -739,7 +745,10 @@ mod tests {
         assert_eq!(body["enable_image_autofix"], true, "boolean strings coerce");
         assert_eq!(body["orientation"], "align_image");
         assert_eq!(body["quad"], true);
-        assert!(body.get("prompt").is_none(), "image-to-model takes no prompt");
+        assert!(
+            body.get("prompt").is_none(),
+            "image-to-model takes no prompt"
+        );
         assert!(
             body.get("negative_prompt").is_none(),
             "negative_prompt belongs to text-to-model only"
@@ -783,10 +792,15 @@ mod tests {
 
     #[test]
     fn failure_reason_prefers_error_message_with_code() {
-        let task = json!({ "status": "failed", "error_code": 2010, "error_message": "image unclear" });
+        let task =
+            json!({ "status": "failed", "error_code": 2010, "error_message": "image unclear" });
         assert_eq!(failure_reason(&task), "image unclear (error 2010)");
         let bare = json!({ "status": "banned" });
-        assert_eq!(failure_reason(&bare), "task banned", "status names a reasonless failure");
+        assert_eq!(
+            failure_reason(&bare),
+            "task banned",
+            "status names a reasonless failure"
+        );
     }
 
     #[test]
@@ -821,9 +835,13 @@ mod tests {
         });
         assert_eq!(
             TaskOutput::from_task(&legacy).urls,
-            vec!["https://x/m.glb".to_string(), "https://x/p.webp".to_string()]
+            vec![
+                "https://x/m.glb".to_string(),
+                "https://x/p.webp".to_string()
+            ]
         );
-        let preview_only = json!({ "data": { "output": { "rendered_image_url": "https://x/p.png" } } });
+        let preview_only =
+            json!({ "data": { "output": { "rendered_image_url": "https://x/p.png" } } });
         assert!(
             TaskOutput::from_task(&preview_only).urls.is_empty(),
             "a preview without a model is not a delivered model"
@@ -838,7 +856,10 @@ mod tests {
         };
         let body = media_callback_success_body("t1", "{}", &outcome);
         assert_eq!(body["state"], "success");
-        assert_eq!(body["usage"]["credits"], 20.0, "credits ride as usage.credits");
+        assert_eq!(
+            body["usage"]["credits"], 20.0,
+            "credits ride as usage.credits"
+        );
         assert_eq!(body["data"]["usage"]["credits"], 20.0);
         let none = media_callback_success_body("t1", "{}", &TaskOutput::default());
         assert!(none.get("usage").is_none(), "no credits, no usage");
