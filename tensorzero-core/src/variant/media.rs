@@ -38,6 +38,7 @@ use crate::model::ModelTable;
 use crate::providers::amux::{AmuxMediaProxyConfig, AmuxProvider};
 use crate::providers::minimax::{MinimaxMediaProxyConfig, MinimaxProvider};
 use crate::providers::novita::{NovitaMediaProxyConfig, NovitaProvider};
+use crate::providers::tripo::{TripoMediaProxyConfig, TripoProvider};
 use crate::relay::TensorzeroRelay;
 
 use super::{InferenceConfig, ModelUsedInfo, Variant};
@@ -73,6 +74,7 @@ pub enum MediaProxyConfig {
     Novita(NovitaMediaProxyConfig),
     Amux(AmuxMediaProxyConfig),
     Minimax(MinimaxMediaProxyConfig),
+    Tripo(TripoMediaProxyConfig),
 }
 
 impl MediaConfig {
@@ -133,6 +135,16 @@ impl Variant for MediaConfig {
                 }
                 MediaProxyConfig::Minimax(proxy) => {
                     MinimaxProvider::infer_media_proxy(
+                        proxy,
+                        inference_params.media_generation.callback_url.as_deref(),
+                        &media_input,
+                        &clients.http_client,
+                        &clients.credentials,
+                    )
+                    .await?
+                }
+                MediaProxyConfig::Tripo(proxy) => {
+                    TripoProvider::infer_media_proxy(
                         proxy,
                         inference_params.media_generation.callback_url.as_deref(),
                         &media_input,
@@ -210,6 +222,7 @@ impl Variant for MediaConfig {
                 MediaProxyConfig::Novita(proxy) => &proxy.path,
                 MediaProxyConfig::Amux(proxy) => &proxy.path,
                 MediaProxyConfig::Minimax(proxy) => &proxy.path,
+                MediaProxyConfig::Tripo(proxy) => &proxy.path,
             };
             if path.is_empty() {
                 return Err(ErrorDetails::Config {

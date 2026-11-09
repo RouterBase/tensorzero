@@ -26,5 +26,6 @@ pub mod sglang;
 pub mod test_helpers;
 pub mod tgi;
 pub mod together;
+pub mod tripo;
 pub mod vllm;
 pub mod xai;
