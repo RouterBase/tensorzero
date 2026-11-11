@@ -16,6 +16,8 @@ use crate::error::{Error, ErrorDetails};
 use crate::http::TensorzeroHttpClient;
 use crate::utils::spawn_ignoring_shutdown;
 
+mod pa;
+
 const PROVIDER_NAME: &str = "Novita";
 const PROVIDER_TYPE: &str = "novita";
 /// Per-HTTP-request timeout for individual calls to Novita (create-task
@@ -50,9 +52,11 @@ pub struct NovitaMediaProxyConfig {
     #[serde(default)]
     pub async_submission: bool,
     pub request_shape: NovitaRequestShape,
-    /// Upstream body `model` for the OAI-native GPT Image shapes, so one shape
-    /// serves several checkpoints (`gpt-image-2.5-flare-oai`, …). Unset keeps
-    /// the shape's default (`gpt-image-2-oai`). Ignored by the other shapes.
+    /// Upstream body `model` for shapes that serve several checkpoints from
+    /// one endpoint: the OAI-native GPT Image shapes (`gpt-image-2.5-flare-oai`,
+    /// …; unset keeps `gpt-image-2-oai`) and Wan 3.0 (`wan3.0-video` /
+    /// `wan3.0-video-prime`; unset keeps `wan3.0-video`). Ignored by the
+    /// other shapes.
     #[serde(default)]
     pub model: Option<Arc<str>>,
 }
@@ -115,25 +119,54 @@ pub enum NovitaRequestShape {
     Sora2ImageToVideo,
     /// OpenAI Sora 2, image-to-video (Pro).
     Sora2ProImageToVideo,
-    /// Kling v3.0 4K, text-to-video. Per Novita's
-    /// `/v3/async/kling-v3.0-4k-t2v` doc: prompt (auto),
-    /// negative_prompt, aspect_ratio, duration (int 3–15),
-    /// cfg_scale (0–1), sound.
+    /// Kling v3.0 4K, text-to-video, on Kling's original-factory protocol
+    /// (`POST /v3/kling/text-to-video/kling-3.0`, see `pa.rs`): prompt,
+    /// aspect_ratio, duration (3-15), sound -> `settings.audio`, multi_shot.
+    /// Resolution is fixed to `4k`. The old `/v3/async/kling-v3.0-4k-t2v`
+    /// route was withdrawn (404) in 2026-11.
     #[serde(rename = "kling_v3_4k_text_to_video")]
     KlingV34kTextToVideo,
-    /// Kling v3.0 4K, image-to-video. Per
-    /// `/v3/async/kling-v3.0-4k-i2v`: image (URL), prompt,
-    /// negative_prompt, end_image, duration, cfg_scale, sound.
-    /// `multi_prompt` is not surfaced — incompatible with end_image
-    /// and would need a separate request_shape if/when we expose it.
+    /// Kling v3.0 4K, image-to-video (`/v3/kling/image-to-video/kling-3.0`):
+    /// `image_urls[0]` is the first frame, `end_image` the last; duration,
+    /// sound, multi_shot. Resolution fixed to `4k`.
     #[serde(rename = "kling_v3_4k_image_to_video")]
     KlingV34kImageToVideo,
-    /// Kling v3.0 Motion Control. Image + reference video; the
+    /// Kling v3.0 Motion Control (`/v3/kling/motion-control/kling-3.0`): the
     /// reference video's motion is transferred onto the still image.
-    /// Per `/v3/async/kling-v3.0-motion-control`: image, video,
-    /// prompt, negative_prompt, model_name (std/pro tier),
-    /// keep_original_sound, character_orientation.
+    /// `model_name` picks the tier (`-pro` = 1080p, `-std` = 720p),
+    /// keep_original_sound -> `settings.audio`, character_orientation.
     KlingV3MotionControl,
+    /// Kling 4.0 text-to-video (`/v3/kling/text-to-video/kling-4.0`):
+    /// prompt, resolution (720p|1080p), aspect_ratio, duration (3-30, or
+    /// omitted to let Kling decide). Billed by the seconds produced.
+    #[serde(rename = "kling_v4_text_to_video")]
+    KlingV4TextToVideo,
+    /// Kling 4.0 multi-keyframe image-to-video
+    /// (`/v3/kling/image-to-video/kling-4.0`): `image_urls[0]` first frame,
+    /// `middle_image_urls[]` middle frames, `end_image` last frame (10
+    /// images at most, addressable as `@first`, `@middle1`.., `@last`).
+    #[serde(rename = "kling_v4_image_to_video")]
+    KlingV4ImageToVideo,
+    /// Kling 4.0 omni reference video (`/v3/kling/omni-video/kling-4.0`):
+    /// reference images (`image_urls`, `@image1`..), feature videos
+    /// (`video_urls`, `@video1`..) and a video to edit (`base_video_url`,
+    /// `@base`). Video input bills at the video-input tier on input + output
+    /// seconds.
+    #[serde(rename = "kling_v4_omni_video")]
+    KlingV4OmniVideo,
+    /// Alibaba Wan 3.0 text-to-video on the DashScope protocol
+    /// (`/v3/aliyun/.../video-synthesis`, see `pa.rs`). The body `model`
+    /// (`wan3.0-video` / `wan3.0-video-prime`) comes from the variant's
+    /// `model`. Billed by `ceil(input video + output)` seconds.
+    #[serde(rename = "wan_3_text_to_video")]
+    Wan3TextToVideo,
+    /// Wan 3.0 first-frame (optionally first+last) image-to-video.
+    #[serde(rename = "wan_3_image_to_video")]
+    Wan3ImageToVideo,
+    /// Wan 3.0 reference-to-video: reference images, videos and audio
+    /// (also video extension / editing, steered by the prompt).
+    #[serde(rename = "wan_3_reference_to_video")]
+    Wan3ReferenceToVideo,
     /// Wan 2.7 text-to-video. Per `/v3/async/wan2.7-t2v`: prompt
     /// (auto), duration (int 2–15), size (e.g. "1920*1080"), seed,
     /// audio_url (optional), negative_prompt (≤500), watermark,
@@ -240,6 +273,23 @@ impl NovitaProvider {
             })
         })?;
         let api_key = get_api_key(dynamic_api_keys)?;
+
+        // Kling / Wan original-factory protocols: their own body, task and
+        // poll shapes (`pa.rs`), always submitted async with gateway polling.
+        if pa::protocol(&proxy.request_shape).is_some() {
+            return pa::infer(
+                &proxy.request_shape,
+                proxy.model.as_deref(),
+                &proxy.path,
+                NOVITA_API_BASE.as_str(),
+                callback_url,
+                input,
+                http_client,
+                api_key.expose_secret(),
+            )
+            .await;
+        }
+
         let body = build_body(&proxy.request_shape, input)?;
 
         // OAI-native GPT Image 2: synchronous OpenAI-compatible endpoints under
@@ -1142,44 +1192,17 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
         NovitaRequestShape::Sora2ImageToVideo | NovitaRequestShape::Sora2ProImageToVideo => {
             &["image", "resolution", "duration"]
         }
-        // Kling v3.0 4K, text-to-video. Per
-        // `/v3/async/kling-v3.0-4k-t2v`: prompt (auto), enum
-        // aspect_ratio, integer duration (3–15), float cfg_scale
-        // (0–1), bool sound, optional negative_prompt.
-        NovitaRequestShape::KlingV34kTextToVideo => &[
-            "negative_prompt",
-            "aspect_ratio",
-            "duration",
-            "cfg_scale",
-            "sound",
-        ],
-        // Kling v3.0 4K, image-to-video. Per
-        // `/v3/async/kling-v3.0-4k-i2v`: prompt (auto), image (URL,
-        // remapped from `image_urls[0]` below), duration, cfg_scale,
-        // sound, negative_prompt, end_image. Multi-shot composition
-        // is exposed via Novita's `multi_prompt` array — not
-        // surfaced here because it's mutually exclusive with
-        // `end_image` and we'd want a separate variant if/when we
-        // ship it.
-        NovitaRequestShape::KlingV34kImageToVideo => &[
-            "negative_prompt",
-            "duration",
-            "cfg_scale",
-            "sound",
-            "end_image",
-        ],
-        // Kling v3.0 Motion Control. Per
-        // `/v3/async/kling-v3.0-motion-control`: image (remapped
-        // from `image_urls[0]`), video (remapped from
-        // `video_urls[0]`), prompt (auto, optional),
-        // negative_prompt, model_name (std/pro tier),
-        // keep_original_sound, character_orientation (image|video).
-        NovitaRequestShape::KlingV3MotionControl => &[
-            "negative_prompt",
-            "model_name",
-            "keep_original_sound",
-            "character_orientation",
-        ],
+        // Original-factory shapes never reach this builder: `infer_media_proxy`
+        // hands them to `pa::build_body` first.
+        NovitaRequestShape::KlingV34kTextToVideo
+        | NovitaRequestShape::KlingV34kImageToVideo
+        | NovitaRequestShape::KlingV3MotionControl
+        | NovitaRequestShape::KlingV4TextToVideo
+        | NovitaRequestShape::KlingV4ImageToVideo
+        | NovitaRequestShape::KlingV4OmniVideo
+        | NovitaRequestShape::Wan3TextToVideo
+        | NovitaRequestShape::Wan3ImageToVideo
+        | NovitaRequestShape::Wan3ReferenceToVideo => &[],
         // Wan 2.7 text-to-video. Per `/v3/async/wan2.7-t2v`: prompt
         // (auto), duration (int 2–15), size, seed, audio_url,
         // negative_prompt (≤500), watermark, prompt_extend.
@@ -1517,57 +1540,6 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
     }
 
     // OAI-native protocol: parameters per OpenAI's Image API. `moderation`
-    // Kling v3.0 4K I2V + Motion Control: Novita body fields are `image`
-    // (single string URL) and, for Motion Control, `video` (single URL).
-    // The playground / parameter_schema exposes `image_urls` / `video_urls`
-    // as arrays for parity with Veo + Sora i2v. Pluck the first element
-    // through. Also forwards the user's `prompt` since these endpoints
-    // accept it as a body field (not auto-injected via the messages array).
-    if matches!(
-        shape,
-        NovitaRequestShape::KlingV34kImageToVideo | NovitaRequestShape::KlingV3MotionControl
-    ) {
-        if !body.contains_key("image") {
-            if let Some(value) = input.get("image").and_then(Value::as_str) {
-                body.insert("image".into(), Value::from(value));
-            } else if let Some(first) = input
-                .get("image_urls")
-                .and_then(Value::as_array)
-                .and_then(|arr| arr.first())
-                .and_then(Value::as_str)
-            {
-                body.insert("image".into(), Value::from(first));
-            }
-        }
-        if !body.contains_key("prompt") {
-            if let Some(value) = input.get("prompt").and_then(Value::as_str) {
-                body.insert("prompt".into(), Value::from(value));
-            }
-        }
-    }
-
-    if matches!(shape, NovitaRequestShape::KlingV3MotionControl) && !body.contains_key("video") {
-        if let Some(value) = input.get("video").and_then(Value::as_str) {
-            body.insert("video".into(), Value::from(value));
-        } else if let Some(first) = input
-            .get("video_urls")
-            .and_then(Value::as_array)
-            .and_then(|arr| arr.first())
-            .and_then(Value::as_str)
-        {
-            body.insert("video".into(), Value::from(first));
-        }
-    }
-
-    // Kling v3.0 4K T2V: forward `prompt` from the input. Same handling
-    // as Sora 2 / Veo T2V — the playground sends it as a top-level
-    // field, not in a messages array.
-    if matches!(shape, NovitaRequestShape::KlingV34kTextToVideo) && !body.contains_key("prompt") {
-        if let Some(value) = input.get("prompt").and_then(Value::as_str) {
-            body.insert("prompt".into(), Value::from(value));
-        }
-    }
-
     // Wan 2.7 I2V: body wants `image_url` (single string). Playground
     // sends `image_urls` array for parity with Veo/Sora/Kling i2v.
     if matches!(shape, NovitaRequestShape::Wan27ImageToVideo) && !body.contains_key("image_url") {
