@@ -36,6 +36,7 @@ use crate::inference::types::{
 use crate::minijinja_util::TemplateConfig;
 use crate::model::ModelTable;
 use crate::providers::amux::{AmuxMediaProxyConfig, AmuxProvider};
+use crate::providers::ark::{ArkMediaProxyConfig, ArkProvider};
 use crate::providers::minimax::{MinimaxMediaProxyConfig, MinimaxProvider};
 use crate::providers::novita::{NovitaMediaProxyConfig, NovitaProvider};
 use crate::providers::tripo::{TripoMediaProxyConfig, TripoProvider};
@@ -75,6 +76,7 @@ pub enum MediaProxyConfig {
     Amux(AmuxMediaProxyConfig),
     Minimax(MinimaxMediaProxyConfig),
     Tripo(TripoMediaProxyConfig),
+    Ark(ArkMediaProxyConfig),
 }
 
 impl MediaConfig {
@@ -153,6 +155,16 @@ impl Variant for MediaConfig {
                     )
                     .await?
                 }
+                MediaProxyConfig::Ark(proxy) => {
+                    ArkProvider::infer_media_proxy(
+                        proxy,
+                        inference_params.media_generation.callback_url.as_deref(),
+                        &media_input,
+                        &clients.http_client,
+                        &clients.credentials,
+                    )
+                    .await?
+                }
             },
             None => {
                 return Err(Error::new(ErrorDetails::Config {
@@ -223,6 +235,7 @@ impl Variant for MediaConfig {
                 MediaProxyConfig::Amux(proxy) => &proxy.path,
                 MediaProxyConfig::Minimax(proxy) => &proxy.path,
                 MediaProxyConfig::Tripo(proxy) => &proxy.path,
+                MediaProxyConfig::Ark(proxy) => &proxy.path,
             };
             if path.is_empty() {
                 return Err(ErrorDetails::Config {
