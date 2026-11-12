@@ -175,8 +175,11 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 /// anything else in `input` (RouterBase bookkeeping such as `n`,
 /// `resolution`, `aspect_ratio`) is dropped rather than tripping validation.
 ///
-/// - `sequential_image_generation` is pinned to `disabled`: Ark bills every
-///   image of a group, and RouterBase prices one image per request.
+/// - `sequential_image_generation` is never sent, so Ark's default
+///   (`disabled`, one image per request) applies: Ark bills every image of a
+///   group and RouterBase prices one image per request. Seedream 5.5 rejects
+///   the field outright ("not supported by the current model"), even as
+///   `disabled`.
 /// - `watermark` defaults to `false`; Ark's own default stamps a visible
 ///   "AI generated" label. A caller can still ask for it.
 /// - `response_format` is `url`; RouterBase mirrors the files to its storage.
@@ -202,7 +205,6 @@ fn build_body(shape: &ArkRequestShape, model: &str, input: &Value) -> Result<Val
         .and_then(Value::as_bool)
         .unwrap_or(false);
     body.insert("watermark".into(), Value::from(watermark));
-    body.insert("sequential_image_generation".into(), json!("disabled"));
     body.insert("response_format".into(), json!("url"));
 
     if *shape == ArkRequestShape::SeedreamEdit {
@@ -345,10 +347,9 @@ mod tests {
                 "prompt": "a red cube",
                 "size": "2K",
                 "watermark": false,
-                "sequential_image_generation": "disabled",
                 "response_format": "url",
             }),
-            "RouterBase bookkeeping is dropped, group generation stays off, watermark defaults off"
+            "RouterBase bookkeeping and group generation are dropped, watermark defaults off"
         );
     }
 
