@@ -60,15 +60,12 @@ pub enum ArkRequestShape {
     #[serde(rename = "seedream_text_to_image")]
     SeedreamTextToImage,
     /// Seedream edit: as above plus the reference images (`image_urls`, sent
-    /// as Ark's `image` array), at least one.
+    /// as Ark's `image` array), at least one. With `layer_decomposition: true`
+    /// (Seedream 5.5) the one input image is split into a base image plus
+    /// layers instead, each a PNG with its position, name and, optionally,
+    /// the text it carries; the prompt is then optional.
     #[serde(rename = "seedream_edit")]
     SeedreamEdit,
-    /// Seedream 5.5 layer decomposition: one input image split into a base
-    /// image plus layers (`layer_decomposition`), each a PNG with its
-    /// position, name and, optionally, the text it carries. The prompt is
-    /// optional (it states how to split).
-    #[serde(rename = "seedream_layers")]
-    SeedreamLayers,
 }
 
 impl ArkProvider {
@@ -216,9 +213,17 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 ///   "AI generated" label. A caller can still ask for it.
 /// - `background` / `output_format` (5.5), `optimize_prompt_mode` (4.0) and
 ///   `safety_identifier` (RouterBase's hashed caller id) pass through.
+/// - Layer decomposition (edit with `layer_decomposition: true`, Seedream
+///   5.5): exactly one image, sent as a string; `max_layers` and
+///   `text_recognition` become `layer_decomposition_options`; no
+///   `background` or group (Ark rejects both in this mode).
 /// - `response_format` is `url`; RouterBase mirrors the files to its storage.
 fn build_body(shape: &ArkRequestShape, model: &str, input: &Value) -> Result<Value, Error> {
-    let layers = *shape == ArkRequestShape::SeedreamLayers;
+    let layers = *shape == ArkRequestShape::SeedreamEdit
+        && input
+            .get("layer_decomposition")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     let prompt = input
         .get("prompt")
         .and_then(Value::as_str)
@@ -266,7 +271,7 @@ fn build_body(shape: &ArkRequestShape, model: &str, input: &Value) -> Result<Val
         .unwrap_or_default();
     match shape {
         ArkRequestShape::SeedreamTextToImage => {}
-        ArkRequestShape::SeedreamEdit => {
+        ArkRequestShape::SeedreamEdit if !layers => {
             if images.is_empty() {
                 return Err(Error::new(ErrorDetails::InvalidRequest {
                     message: "`image_urls` needs at least one image".to_string(),
@@ -274,7 +279,7 @@ fn build_body(shape: &ArkRequestShape, model: &str, input: &Value) -> Result<Val
             }
             body.insert("image".into(), Value::Array(images));
         }
-        ArkRequestShape::SeedreamLayers => {
+        ArkRequestShape::SeedreamEdit => {
             let [image] = images.as_slice() else {
                 return Err(Error::new(ErrorDetails::InvalidRequest {
                     message: "layer decomposition takes exactly one image in `image_urls`"
@@ -580,11 +585,12 @@ mod tests {
     }
 
     #[test]
-    fn layers_split_exactly_one_image() {
+    fn layer_decomposition_is_an_edit_mode_on_exactly_one_image() {
         let body = build_body(
-            &ArkRequestShape::SeedreamLayers,
+            &ArkRequestShape::SeedreamEdit,
             "doubao-seedream-5-5-261028",
-            &json!({"image_urls": ["https://a/poster.png"], "max_layers": 12, "text_recognition": true,
+            &json!({"layer_decomposition": true, "image_urls": ["https://a/poster.png"],
+                    "max_layers": 12, "text_recognition": true,
                     "size": "auto", "background": "transparent", "max_images": 5}),
         )
         .unwrap();
@@ -604,14 +610,35 @@ mod tests {
         for images in [json!([]), json!(["https://a/1.png", "https://a/2.png"])] {
             assert!(
                 build_body(
-                    &ArkRequestShape::SeedreamLayers,
+                    &ArkRequestShape::SeedreamEdit,
                     "m",
-                    &json!({"image_urls": images})
+                    &json!({"layer_decomposition": true, "image_urls": images})
                 )
                 .is_err(),
                 "layer decomposition takes exactly one image: {images}"
             );
         }
+        let plain = build_body(
+            &ArkRequestShape::SeedreamEdit,
+            "m",
+            &json!({"prompt": "x", "layer_decomposition": false,
+                    "image_urls": ["https://a/1.png"], "max_layers": 12}),
+        )
+        .unwrap();
+        assert!(
+            plain.get("layer_decomposition").is_none()
+                && plain.get("layer_decomposition_options").is_none(),
+            "off: a plain edit, the layer options are ignored"
+        );
+        assert!(
+            build_body(
+                &ArkRequestShape::SeedreamTextToImage,
+                "m",
+                &json!({"layer_decomposition": true, "image_urls": ["https://a/1.png"]})
+            )
+            .is_err(),
+            "text-to-image has no layer mode, so it still needs a prompt"
+        );
     }
 
     #[test]
@@ -688,7 +715,6 @@ mod tests {
                 ArkRequestShape::SeedreamTextToImage,
             ),
             ("seedream_edit", ArkRequestShape::SeedreamEdit),
-            ("seedream_layers", ArkRequestShape::SeedreamLayers),
         ] {
             let proxy: ArkMediaProxyConfig = serde_json::from_value(json!({
                 "path": "doubao-seedream-5-5-261028",
