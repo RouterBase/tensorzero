@@ -29,8 +29,9 @@ use crate::http::TensorzeroHttpClient;
 const PROVIDER_NAME: &str = "Ark";
 const PROVIDER_TYPE: &str = "ark";
 const API_KEY_ENV: &str = "ARK_API_KEY";
-/// One synchronous generation; a 4K image can take a minute or two.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+/// One synchronous generation: a 4K image takes a minute or two, a group of
+/// 15 images or a split into 100 layers several.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 /// Attempts to deliver the success callback, `CALLBACK_RETRY_DELAY` x attempt
 /// apart: Ark has already generated and billed the image by then.
 /// RouterBase's callback handler is idempotent.
@@ -62,6 +63,12 @@ pub enum ArkRequestShape {
     /// as Ark's `image` array), at least one.
     #[serde(rename = "seedream_edit")]
     SeedreamEdit,
+    /// Seedream 5.5 layer decomposition: one input image split into a base
+    /// image plus layers (`layer_decomposition`), each a PNG with its
+    /// position, name and, optionally, the text it carries. The prompt is
+    /// optional (it states how to split).
+    #[serde(rename = "seedream_layers")]
+    SeedreamLayers,
 }
 
 impl ArkProvider {
@@ -130,7 +137,11 @@ impl ArkProvider {
                 raw_response: Some(raw.clone()),
             })
         })?;
-        let urls = image_urls(&parsed);
+        let items = result_items(&parsed);
+        let urls: Vec<String> = items
+            .iter()
+            .filter_map(|item| item["url"].as_str().map(str::to_string))
+            .collect();
         if urls.is_empty() {
             // Every image failed (e.g. an output moderation hit): Ark puts the
             // reason on the item instead of failing the request.
@@ -148,6 +159,7 @@ impl ArkProvider {
         }
 
         let task_id = format!("ark-{}", Uuid::now_v7());
+        let usage = callback_usage(&parsed, &items);
         let mut attempt = 1;
         loop {
             match post_media_callback(
@@ -155,7 +167,8 @@ impl ArkProvider {
                 callback_url,
                 &task_id,
                 &urls,
-                parsed.get("usage"),
+                &items,
+                usage.as_ref(),
             )
             .await
             {
@@ -192,31 +205,46 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 /// Build the generation body. Only what Ark documents for Seedream is sent:
 /// anything else in `input` (RouterBase bookkeeping such as `n`,
 /// `resolution`, `aspect_ratio`) is dropped rather than tripping validation.
+/// RouterBase resolves the size (a preset or `WIDTHxHEIGHT`) and only sends
+/// the options the model's schema offers.
 ///
-/// - `sequential_image_generation` is never sent, so Ark's default
-///   (`disabled`, one image per request) applies: Ark bills every image of a
-///   group and RouterBase prices one image per request. Seedream 5.5 rejects
-///   the field outright ("not supported by the current model"), even as
-///   `disabled`.
+/// - `sequential_image_generation` is sent only when RouterBase asks for a
+///   group (`max_images` > 1, Seedream 4.x / 5.0 lite): Ark then returns up to
+///   that many images and bills each one. Seedream 5.5 rejects the field
+///   outright, so it is otherwise left out (Ark's default: one image).
 /// - `watermark` defaults to `false`; Ark's own default stamps a visible
 ///   "AI generated" label. A caller can still ask for it.
+/// - `background` / `output_format` (5.5), `optimize_prompt_mode` (4.0) and
+///   `safety_identifier` (RouterBase's hashed caller id) pass through.
 /// - `response_format` is `url`; RouterBase mirrors the files to its storage.
 fn build_body(shape: &ArkRequestShape, model: &str, input: &Value) -> Result<Value, Error> {
+    let layers = *shape == ArkRequestShape::SeedreamLayers;
     let prompt = input
         .get("prompt")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .ok_or_else(|| {
-            Error::new(ErrorDetails::InvalidRequest {
-                message: "`prompt` is required".to_string(),
-            })
-        })?;
+        .filter(|p| !p.is_empty());
+    if prompt.is_none() && !layers {
+        return Err(Error::new(ErrorDetails::InvalidRequest {
+            message: "`prompt` is required".to_string(),
+        }));
+    }
     let mut body = Map::new();
     body.insert("model".into(), Value::from(model));
-    body.insert("prompt".into(), Value::from(prompt));
-    if let Some(size) = input.get("size").and_then(Value::as_str) {
-        body.insert("size".into(), Value::from(size));
+    if let Some(prompt) = prompt {
+        body.insert("prompt".into(), Value::from(prompt));
+    }
+    for key in ["size", "output_format", "safety_identifier"] {
+        if let Some(value) = input.get(key).and_then(Value::as_str) {
+            body.insert(key.into(), Value::from(value));
+        }
+    }
+    // Not allowed in layer mode (Ark rejects it there).
+    if !layers && let Some(background) = input.get("background").and_then(Value::as_str) {
+        body.insert("background".into(), Value::from(background));
+    }
+    if let Some(mode) = input.get("optimize_prompt_mode").and_then(Value::as_str) {
+        body.insert("optimize_prompt_options".into(), json!({ "mode": mode }));
     }
     let watermark = input
         .get("watermark")
@@ -225,40 +253,121 @@ fn build_body(shape: &ArkRequestShape, model: &str, input: &Value) -> Result<Val
     body.insert("watermark".into(), Value::from(watermark));
     body.insert("response_format".into(), json!("url"));
 
-    if *shape == ArkRequestShape::SeedreamEdit {
-        let images: Vec<Value> = input
-            .get("image_urls")
-            .and_then(Value::as_array)
-            .map(|urls| {
-                urls.iter()
-                    .filter_map(Value::as_str)
-                    .filter(|u| !u.trim().is_empty())
-                    .map(Value::from)
-                    .collect()
-            })
-            .unwrap_or_default();
-        if images.is_empty() {
-            return Err(Error::new(ErrorDetails::InvalidRequest {
-                message: "`image_urls` needs at least one image".to_string(),
-            }));
+    let images: Vec<Value> = input
+        .get("image_urls")
+        .and_then(Value::as_array)
+        .map(|urls| {
+            urls.iter()
+                .filter_map(Value::as_str)
+                .filter(|u| !u.trim().is_empty())
+                .map(Value::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    match shape {
+        ArkRequestShape::SeedreamTextToImage => {}
+        ArkRequestShape::SeedreamEdit => {
+            if images.is_empty() {
+                return Err(Error::new(ErrorDetails::InvalidRequest {
+                    message: "`image_urls` needs at least one image".to_string(),
+                }));
+            }
+            body.insert("image".into(), Value::Array(images));
         }
-        body.insert("image".into(), Value::Array(images));
+        ArkRequestShape::SeedreamLayers => {
+            let [image] = images.as_slice() else {
+                return Err(Error::new(ErrorDetails::InvalidRequest {
+                    message: "layer decomposition takes exactly one image in `image_urls`"
+                        .to_string(),
+                }));
+            };
+            body.insert("image".into(), image.clone());
+            body.insert("layer_decomposition".into(), Value::Bool(true));
+            let mut options = Map::new();
+            if let Some(max) = input.get("max_layers").and_then(Value::as_u64) {
+                options.insert("max_images".into(), Value::from(max));
+            }
+            if let Some(ocr) = input.get("text_recognition").and_then(Value::as_bool) {
+                options.insert("text_recognition".into(), Value::Bool(ocr));
+            }
+            if !options.is_empty() {
+                body.insert("layer_decomposition_options".into(), Value::Object(options));
+            }
+        }
+    }
+    // A group of images (Seedream 4.x / 5.0 lite), asked for as `max_images`.
+    if !layers
+        && let Some(max) = input
+            .get("max_images")
+            .and_then(Value::as_u64)
+            .filter(|m| *m > 1)
+    {
+        body.insert("sequential_image_generation".into(), json!("auto"));
+        body.insert(
+            "sequential_image_generation_options".into(),
+            json!({ "max_images": max }),
+        );
     }
     Ok(Value::Object(body))
 }
 
-/// The image URLs of a successful response, skipping items that failed.
-fn image_urls(response: &Value) -> Vec<String> {
+/// Per successful image: its URL and the metadata RouterBase keeps with it
+/// (size, format and, for layers, z-index, name, bounding box and text).
+fn result_items(response: &Value) -> Vec<Value> {
+    const KEPT: [&str; 7] = [
+        "size",
+        "output_format",
+        "z_index",
+        "name",
+        "description",
+        "bounding_box",
+        "text_recognition",
+    ];
     response["data"]
         .as_array()
         .map(|items| {
             items
                 .iter()
-                .filter_map(|item| item["url"].as_str())
-                .map(str::to_string)
+                .filter(|item| item["url"].as_str().is_some_and(|u| !u.is_empty()))
+                .map(|item| {
+                    let mut kept = Map::new();
+                    kept.insert("url".into(), item["url"].clone());
+                    for key in KEPT {
+                        if let Some(v) = item.get(key).filter(|v| !v.is_null()) {
+                            kept.insert(key.into(), v.clone());
+                        }
+                    }
+                    Value::Object(kept)
+                })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The pixel count of each image Ark returned (`size` is `WIDTHxHEIGHT`), so
+/// RouterBase can price every output by its resolution tier.
+fn output_pixels(items: &[Value]) -> Vec<u64> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let (w, h) = item["size"].as_str()?.split_once('x')?;
+            Some(w.trim().parse::<u64>().ok()? * h.trim().parse::<u64>().ok()?)
+        })
+        .collect()
+}
+
+/// Ark's `usage` plus `output_pixels` (one entry per returned image).
+fn callback_usage(response: &Value, items: &[Value]) -> Option<Value> {
+    let mut usage = response
+        .get("usage")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let pixels = output_pixels(items);
+    if !pixels.is_empty() {
+        usage.insert("output_pixels".into(), json!(pixels));
+    }
+    (!usage.is_empty()).then_some(Value::Object(usage))
 }
 
 /// Ark's reason for rejecting a request or an image, worded so RouterBase
@@ -283,9 +392,10 @@ async fn post_media_callback(
     callback_url: &str,
     task_id: &str,
     urls: &[String],
+    items: &[Value],
     usage: Option<&Value>,
 ) -> Result<(), Error> {
-    let body = media_callback_success_body(task_id, urls, usage);
+    let body = media_callback_success_body(task_id, urls, items, usage);
     let response = http_client
         .post(callback_url)
         .json(&body)
@@ -314,8 +424,15 @@ async fn post_media_callback(
 }
 
 /// The success callback in the shape RouterBase's `media_callback` reads (the
-/// same as the other media providers), with Ark's `usage` passed through.
-fn media_callback_success_body(task_id: &str, urls: &[String], usage: Option<&Value>) -> Value {
+/// same as the other media providers), with Ark's `usage` (plus
+/// `output_pixels`) passed through and each image's metadata as
+/// `resultItems`.
+fn media_callback_success_body(
+    task_id: &str,
+    urls: &[String],
+    items: &[Value],
+    usage: Option<&Value>,
+) -> Value {
     let result_json = json!({ "resultUrls": urls }).to_string();
     let mut body = json!({
         "taskId": task_id,
@@ -334,6 +451,10 @@ fn media_callback_success_body(task_id: &str, urls: &[String], usage: Option<&Va
         body["usage"] = usage.clone();
         body["data"]["usage"] = usage.clone();
     }
+    if !items.is_empty() {
+        body["resultItems"] = json!(items);
+        body["data"]["resultItems"] = json!(items);
+    }
     body
 }
 
@@ -345,12 +466,11 @@ mod tests {
     fn text_to_image_body_keeps_only_documented_fields() {
         let input = json!({
             "prompt": " a red cube ",
-            "size": "2K",
+            "size": "2560x1440",
             "n": 1,
             "resolution": "1K",
-            "aspect_ratio": "1:1",
+            "aspect_ratio": "16:9",
             "sequential_image_generation": "auto",
-            "max_images": 4,
         });
         let body = build_body(
             &ArkRequestShape::SeedreamTextToImage,
@@ -363,22 +483,75 @@ mod tests {
             json!({
                 "model": "seedream-4-5-251128",
                 "prompt": "a red cube",
-                "size": "2K",
+                "size": "2560x1440",
                 "watermark": false,
                 "response_format": "url",
             }),
-            "RouterBase bookkeeping and group generation are dropped, watermark defaults off"
+            "RouterBase bookkeeping is dropped, a caller's sequential flag isn't forwarded, watermark defaults off"
         );
     }
 
     #[test]
-    fn caller_can_ask_for_the_watermark() {
-        let input = json!({"prompt": "x", "watermark": true});
+    fn model_options_pass_through() {
+        let input = json!({
+            "prompt": "x", "watermark": true, "background": "transparent", "output_format": "png",
+            "optimize_prompt_mode": "fast", "safety_identifier": "u-abc",
+        });
         let body = build_body(&ArkRequestShape::SeedreamTextToImage, "m", &input).unwrap();
         assert_eq!(
             body["watermark"],
             json!(true),
             "an explicit watermark=true is forwarded"
+        );
+        assert_eq!(
+            body["background"],
+            json!("transparent"),
+            "5.5's background is forwarded"
+        );
+        assert_eq!(
+            body["output_format"],
+            json!("png"),
+            "output_format is forwarded"
+        );
+        assert_eq!(
+            body["optimize_prompt_options"],
+            json!({"mode": "fast"}),
+            "optimize_prompt_mode becomes Ark's optimize_prompt_options.mode"
+        );
+        assert_eq!(
+            body["safety_identifier"],
+            json!("u-abc"),
+            "the hashed caller id is forwarded"
+        );
+    }
+
+    #[test]
+    fn a_group_is_asked_for_with_max_images() {
+        let body = build_body(
+            &ArkRequestShape::SeedreamTextToImage,
+            "m",
+            &json!({"prompt": "a 4-panel comic", "max_images": 4}),
+        )
+        .unwrap();
+        assert_eq!(
+            body["sequential_image_generation"],
+            json!("auto"),
+            "max_images > 1 turns the group on"
+        );
+        assert_eq!(
+            body["sequential_image_generation_options"],
+            json!({"max_images": 4}),
+            "the group is capped at what RouterBase held for"
+        );
+        let single = build_body(
+            &ArkRequestShape::SeedreamTextToImage,
+            "m",
+            &json!({"prompt": "x", "max_images": 1}),
+        )
+        .unwrap();
+        assert!(
+            single.get("sequential_image_generation").is_none(),
+            "one image needs no group (Seedream 5.5 rejects the field)"
         );
     }
 
@@ -407,18 +580,66 @@ mod tests {
     }
 
     #[test]
-    fn response_parsing_skips_failed_items_and_words_rejections() {
-        let ok = json!({
-            "data": [
-                {"url": "https://out/1.jpeg", "size": "2048x2048"},
-                {"error": {"code": "OutputImageSensitiveContentDetected", "message": "blocked"}}
-            ],
-            "usage": {"generated_images": 1}
-        });
+    fn layers_split_exactly_one_image() {
+        let body = build_body(
+            &ArkRequestShape::SeedreamLayers,
+            "doubao-seedream-5-5-261028",
+            &json!({"image_urls": ["https://a/poster.png"], "max_layers": 12, "text_recognition": true,
+                    "size": "auto", "background": "transparent", "max_images": 5}),
+        )
+        .unwrap();
         assert_eq!(
-            image_urls(&ok),
-            vec!["https://out/1.jpeg".to_string()],
-            "items that failed are skipped"
+            body,
+            json!({
+                "model": "doubao-seedream-5-5-261028",
+                "image": "https://a/poster.png",
+                "size": "auto",
+                "layer_decomposition": true,
+                "layer_decomposition_options": {"max_images": 12, "text_recognition": true},
+                "watermark": false,
+                "response_format": "url",
+            }),
+            "no prompt needed; one image as a string; no background or group in layer mode"
+        );
+        for images in [json!([]), json!(["https://a/1.png", "https://a/2.png"])] {
+            assert!(
+                build_body(
+                    &ArkRequestShape::SeedreamLayers,
+                    "m",
+                    &json!({"image_urls": images})
+                )
+                .is_err(),
+                "layer decomposition takes exactly one image: {images}"
+            );
+        }
+    }
+
+    #[test]
+    fn response_items_keep_metadata_and_skip_failures() {
+        let response = json!({
+            "data": [
+                {"url": "https://out/0.png", "size": "2048x2048", "output_format": "png", "z_index": 0},
+                {"error": {"code": "OutputImageSensitiveContentDetected", "message": "blocked"}},
+                {"url": "https://out/1.png", "size": "1024x512", "z_index": 1, "name": "title",
+                 "bounding_box": {"absolute": [10, 20, 1034, 532]}, "description": null}
+            ],
+            "usage": {"generated_images": 2, "output_tokens": 18432}
+        });
+        let items = result_items(&response);
+        assert_eq!(
+            items,
+            vec![
+                json!({"url": "https://out/0.png", "size": "2048x2048", "output_format": "png", "z_index": 0}),
+                json!({"url": "https://out/1.png", "size": "1024x512", "z_index": 1, "name": "title",
+                       "bounding_box": {"absolute": [10, 20, 1034, 532]}}),
+            ],
+            "failed items are skipped, null fields dropped, layer metadata kept"
+        );
+        assert_eq!(
+            callback_usage(&response, &items),
+            Some(json!({"generated_images": 2, "output_tokens": 18432,
+                        "output_pixels": [2048 * 2048, 1024 * 512]})),
+            "every returned image's pixel count rides on the usage, for tier billing"
         );
 
         let rejected = json!({"error": {"code": "InvalidParameter", "message": "size is invalid", "type": "BadRequest"}});
@@ -435,48 +656,50 @@ mod tests {
     }
 
     #[test]
-    fn callback_carries_urls_and_usage() {
+    fn callback_carries_urls_items_and_usage() {
         let urls = vec!["https://out/1.jpeg".to_string()];
-        let usage = json!({"generated_images": 1, "output_tokens": 16384});
-        let body = media_callback_success_body("ark-1", &urls, Some(&usage));
+        let items = vec![json!({"url": "https://out/1.jpeg", "size": "1024x1024"})];
+        let usage = json!({"generated_images": 1, "output_pixels": [1048576]});
+        let body = media_callback_success_body("ark-1", &urls, &items, Some(&usage));
         assert_eq!(body["state"], "success", "a success callback");
         assert_eq!(
             body["resultUrls"],
             json!(urls),
             "the image URLs RouterBase mirrors"
         );
-        assert_eq!(body["usage"], usage, "Ark's usage is passed through");
+        assert_eq!(body["resultItems"], json!(items), "each image's metadata");
+        assert_eq!(body["usage"], usage, "the usage RouterBase settles from");
         assert_eq!(
             body["data"]["usage"], usage,
             "and mirrored under data, like the other providers"
         );
+        let bare = media_callback_success_body("ark-1", &urls, &[], None);
         assert!(
-            media_callback_success_body("ark-1", &urls, None)
-                .get("usage")
-                .is_none(),
-            "no usage key when Ark sent none"
+            bare.get("usage").is_none() && bare.get("resultItems").is_none(),
+            "no usage or items keys when there are none"
         );
     }
 
     #[test]
     fn rendered_shape_names_deserialize() {
-        let proxy: ArkMediaProxyConfig = serde_json::from_value(json!({
-            "path": "doubao-seedream-5-5-261028",
-            "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-            "request_shape": "seedream_edit",
-        }))
-        .unwrap();
-        assert_eq!(
-            proxy.request_shape,
-            ArkRequestShape::SeedreamEdit,
-            "the rendered edit shape name deserializes"
-        );
-        let shape: ArkRequestShape =
-            serde_json::from_value(json!("seedream_text_to_image")).unwrap();
-        assert_eq!(
-            shape,
-            ArkRequestShape::SeedreamTextToImage,
-            "the rendered text-to-image shape name deserializes"
-        );
+        for (name, shape) in [
+            (
+                "seedream_text_to_image",
+                ArkRequestShape::SeedreamTextToImage,
+            ),
+            ("seedream_edit", ArkRequestShape::SeedreamEdit),
+            ("seedream_layers", ArkRequestShape::SeedreamLayers),
+        ] {
+            let proxy: ArkMediaProxyConfig = serde_json::from_value(json!({
+                "path": "doubao-seedream-5-5-261028",
+                "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+                "request_shape": name,
+            }))
+            .unwrap_or_else(|e| panic!("`{name}` must deserialize: {e}"));
+            assert_eq!(
+                proxy.request_shape, shape,
+                "`{name}` is the shape RouterBase renders"
+            );
+        }
     }
 }

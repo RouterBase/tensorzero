@@ -1648,6 +1648,25 @@ fn build_body(shape: &NovitaRequestShape, input: &Value) -> Result<Value, Error>
         }
     }
 
+    // Seedream 4.5 / 5.0 lite edit on PPIO: the reference images go out as
+    // the route's `image` array (1 to 14 URLs); text-to-image sends none.
+    if matches!(shape, NovitaRequestShape::SeedreamImage) {
+        let images: Vec<Value> = input
+            .get("image_urls")
+            .and_then(Value::as_array)
+            .map(|urls| {
+                urls.iter()
+                    .filter_map(Value::as_str)
+                    .filter(|u| !u.trim().is_empty())
+                    .map(Value::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !images.is_empty() {
+            body.insert("image".into(), Value::Array(images));
+        }
+    }
+
     if matches!(
         shape,
         NovitaRequestShape::GeminiImageTextToImage | NovitaRequestShape::GeminiImageEdit
@@ -2948,6 +2967,20 @@ mod vidu_build_body_tests {
         assert!(
             body.get("model").is_none(),
             "only 3.0 injects a fixed model; 4.x/5.x select the checkpoint by URL path"
+        );
+        assert!(
+            body.get("image").is_none(),
+            "text-to-image sends no reference images"
+        );
+        let edit = build_body(
+            &NovitaRequestShape::SeedreamImage,
+            &json!({"prompt": "make it blue", "image_urls": ["https://a/1.png", " ", "https://a/2.png"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            edit.get("image"),
+            Some(&json!(["https://a/1.png", "https://a/2.png"])),
+            "an edit sends its reference images as the route's `image` array"
         );
     }
 
