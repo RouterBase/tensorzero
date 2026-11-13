@@ -31,6 +31,11 @@ const PROVIDER_TYPE: &str = "ark";
 const API_KEY_ENV: &str = "ARK_API_KEY";
 /// One synchronous generation; a 4K image can take a minute or two.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+/// Attempts to deliver the success callback, `CALLBACK_RETRY_DELAY` x attempt
+/// apart: Ark has already generated and billed the image by then.
+/// RouterBase's callback handler is idempotent.
+const CALLBACK_ATTEMPTS: u32 = 3;
+const CALLBACK_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 pub struct ArkProvider;
 
@@ -143,15 +148,28 @@ impl ArkProvider {
         }
 
         let task_id = format!("ark-{}", Uuid::now_v7());
-        post_media_callback(
-            http_client,
-            callback_url,
-            &task_id,
-            &urls,
-            parsed.get("usage"),
-        )
-        .await?;
-        Ok(task_id)
+        let mut attempt = 1;
+        loop {
+            match post_media_callback(
+                http_client,
+                callback_url,
+                &task_id,
+                &urls,
+                parsed.get("usage"),
+            )
+            .await
+            {
+                Ok(()) => return Ok(task_id),
+                Err(e) if attempt < CALLBACK_ATTEMPTS => {
+                    tracing::warn!(
+                        "Success callback for Ark task {task_id} failed (attempt {attempt}/{CALLBACK_ATTEMPTS}): {e}"
+                    );
+                    tokio::time::sleep(CALLBACK_RETRY_DELAY * attempt).await;
+                    attempt += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 
@@ -357,14 +375,22 @@ mod tests {
     fn caller_can_ask_for_the_watermark() {
         let input = json!({"prompt": "x", "watermark": true});
         let body = build_body(&ArkRequestShape::SeedreamTextToImage, "m", &input).unwrap();
-        assert_eq!(body["watermark"], json!(true));
+        assert_eq!(
+            body["watermark"],
+            json!(true),
+            "an explicit watermark=true is forwarded"
+        );
     }
 
     #[test]
     fn edit_sends_reference_images_and_requires_one() {
         let input = json!({"prompt": "make it blue", "image_urls": ["https://a/1.png", "", "https://a/2.png"]});
         let body = build_body(&ArkRequestShape::SeedreamEdit, "m", &input).unwrap();
-        assert_eq!(body["image"], json!(["https://a/1.png", "https://a/2.png"]));
+        assert_eq!(
+            body["image"],
+            json!(["https://a/1.png", "https://a/2.png"]),
+            "reference images go out as Ark's `image` array, blanks dropped"
+        );
         assert!(
             build_body(&ArkRequestShape::SeedreamEdit, "m", &json!({"prompt": "x"})).is_err(),
             "an edit without images is rejected before calling Ark"
@@ -389,7 +415,11 @@ mod tests {
             ],
             "usage": {"generated_images": 1}
         });
-        assert_eq!(image_urls(&ok), vec!["https://out/1.jpeg".to_string()]);
+        assert_eq!(
+            image_urls(&ok),
+            vec!["https://out/1.jpeg".to_string()],
+            "items that failed are skipped"
+        );
 
         let rejected = json!({"error": {"code": "InvalidParameter", "message": "size is invalid", "type": "BadRequest"}});
         assert_eq!(
@@ -397,7 +427,11 @@ mod tests {
             Some("Ark rejected the request (InvalidParameter): size is invalid"),
             "RouterBase strips the `Ark ... : ` prefix and shows the upstream message"
         );
-        assert_eq!(rejection(&json!({"data": []})), None);
+        assert_eq!(
+            rejection(&json!({"data": []})),
+            None,
+            "a body without an error is not a rejection"
+        );
     }
 
     #[test]
@@ -405,14 +439,22 @@ mod tests {
         let urls = vec!["https://out/1.jpeg".to_string()];
         let usage = json!({"generated_images": 1, "output_tokens": 16384});
         let body = media_callback_success_body("ark-1", &urls, Some(&usage));
-        assert_eq!(body["state"], "success");
-        assert_eq!(body["resultUrls"], json!(urls));
-        assert_eq!(body["usage"], usage);
-        assert_eq!(body["data"]["usage"], usage);
+        assert_eq!(body["state"], "success", "a success callback");
+        assert_eq!(
+            body["resultUrls"],
+            json!(urls),
+            "the image URLs RouterBase mirrors"
+        );
+        assert_eq!(body["usage"], usage, "Ark's usage is passed through");
+        assert_eq!(
+            body["data"]["usage"], usage,
+            "and mirrored under data, like the other providers"
+        );
         assert!(
             media_callback_success_body("ark-1", &urls, None)
                 .get("usage")
-                .is_none()
+                .is_none(),
+            "no usage key when Ark sent none"
         );
     }
 
@@ -424,9 +466,17 @@ mod tests {
             "request_shape": "seedream_edit",
         }))
         .unwrap();
-        assert_eq!(proxy.request_shape, ArkRequestShape::SeedreamEdit);
+        assert_eq!(
+            proxy.request_shape,
+            ArkRequestShape::SeedreamEdit,
+            "the rendered edit shape name deserializes"
+        );
         let shape: ArkRequestShape =
             serde_json::from_value(json!("seedream_text_to_image")).unwrap();
-        assert_eq!(shape, ArkRequestShape::SeedreamTextToImage);
+        assert_eq!(
+            shape,
+            ArkRequestShape::SeedreamTextToImage,
+            "the rendered text-to-image shape name deserializes"
+        );
     }
 }

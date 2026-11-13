@@ -21,6 +21,7 @@ use std::sync::Arc;
 use chrono::Duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::config::PathWithContents;
 use crate::embeddings::EmbeddingModelTable;
@@ -243,6 +244,11 @@ impl Variant for MediaConfig {
                 }
                 .into());
             }
+            // Ark has no default host (keys are bound to their region's), so a
+            // missing or relative base must fail at load, not on every call.
+            if let MediaProxyConfig::Ark(proxy) = proxy {
+                validate_ark_api_base(&proxy.api_base)?;
+            }
         }
         Ok(())
     }
@@ -271,6 +277,21 @@ impl Variant for MediaConfig {
     }
 }
 
+/// An Ark proxy's `api_base` must be an absolute http(s) URL with a host.
+fn validate_ark_api_base(api_base: &str) -> Result<(), Error> {
+    let valid =
+        Url::parse(api_base).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.has_host());
+    if valid {
+        return Ok(());
+    }
+    Err(ErrorDetails::Config {
+        message: format!(
+            "ark media proxy requires an absolute http(s) `api_base`, got `{api_base}`"
+        ),
+    }
+    .into())
+}
+
 /// Extract a text prompt from the last user message in the lazy resolved input.
 fn extract_prompt_text(input: &LazyResolvedInput) -> Result<String, Error> {
     input
@@ -294,4 +315,28 @@ fn extract_prompt_text(input: &LazyResolvedInput) -> Result<String, Error> {
             }
             .into()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ark_api_base_must_be_an_absolute_http_url() {
+        assert!(
+            validate_ark_api_base("https://ark.cn-beijing.volces.com/api/v3").is_ok(),
+            "the rendered region host is accepted"
+        );
+        for bad in [
+            "",
+            "ark.cn-beijing.volces.com/api/v3",
+            "ftp://ark.example/api",
+            "https://",
+        ] {
+            assert!(
+                validate_ark_api_base(bad).is_err(),
+                "`{bad}` must fail at config load, not on every Seedream call"
+            );
+        }
+    }
 }
