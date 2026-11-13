@@ -21,6 +21,7 @@ use std::sync::Arc;
 use chrono::Duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::config::PathWithContents;
 use crate::embeddings::EmbeddingModelTable;
@@ -36,6 +37,7 @@ use crate::inference::types::{
 use crate::minijinja_util::TemplateConfig;
 use crate::model::ModelTable;
 use crate::providers::amux::{AmuxMediaProxyConfig, AmuxProvider};
+use crate::providers::ark::{ArkMediaProxyConfig, ArkProvider};
 use crate::providers::minimax::{MinimaxMediaProxyConfig, MinimaxProvider};
 use crate::providers::novita::{NovitaMediaProxyConfig, NovitaProvider};
 use crate::providers::tripo::{TripoMediaProxyConfig, TripoProvider};
@@ -75,6 +77,7 @@ pub enum MediaProxyConfig {
     Amux(AmuxMediaProxyConfig),
     Minimax(MinimaxMediaProxyConfig),
     Tripo(TripoMediaProxyConfig),
+    Ark(ArkMediaProxyConfig),
 }
 
 impl MediaConfig {
@@ -153,6 +156,16 @@ impl Variant for MediaConfig {
                     )
                     .await?
                 }
+                MediaProxyConfig::Ark(proxy) => {
+                    ArkProvider::infer_media_proxy(
+                        proxy,
+                        inference_params.media_generation.callback_url.as_deref(),
+                        &media_input,
+                        &clients.http_client,
+                        &clients.credentials,
+                    )
+                    .await?
+                }
             },
             None => {
                 return Err(Error::new(ErrorDetails::Config {
@@ -223,12 +236,18 @@ impl Variant for MediaConfig {
                 MediaProxyConfig::Amux(proxy) => &proxy.path,
                 MediaProxyConfig::Minimax(proxy) => &proxy.path,
                 MediaProxyConfig::Tripo(proxy) => &proxy.path,
+                MediaProxyConfig::Ark(proxy) => &proxy.path,
             };
             if path.is_empty() {
                 return Err(ErrorDetails::Config {
                     message: "media proxy requires a non-empty `path` field".to_string(),
                 }
                 .into());
+            }
+            // Ark has no default host (keys are bound to their region's), so a
+            // missing or relative base must fail at load, not on every call.
+            if let MediaProxyConfig::Ark(proxy) = proxy {
+                validate_ark_api_base(&proxy.api_base)?;
             }
         }
         Ok(())
@@ -258,6 +277,21 @@ impl Variant for MediaConfig {
     }
 }
 
+/// An Ark proxy's `api_base` must be an absolute http(s) URL with a host.
+fn validate_ark_api_base(api_base: &str) -> Result<(), Error> {
+    let valid =
+        Url::parse(api_base).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.has_host());
+    if valid {
+        return Ok(());
+    }
+    Err(ErrorDetails::Config {
+        message: format!(
+            "ark media proxy requires an absolute http(s) `api_base`, got `{api_base}`"
+        ),
+    }
+    .into())
+}
+
 /// Extract a text prompt from the last user message in the lazy resolved input.
 fn extract_prompt_text(input: &LazyResolvedInput) -> Result<String, Error> {
     input
@@ -281,4 +315,28 @@ fn extract_prompt_text(input: &LazyResolvedInput) -> Result<String, Error> {
             }
             .into()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ark_api_base_must_be_an_absolute_http_url() {
+        assert!(
+            validate_ark_api_base("https://ark.cn-beijing.volces.com/api/v3").is_ok(),
+            "the rendered region host is accepted"
+        );
+        for bad in [
+            "",
+            "ark.cn-beijing.volces.com/api/v3",
+            "ftp://ark.example/api",
+            "https://",
+        ] {
+            assert!(
+                validate_ark_api_base(bad).is_err(),
+                "`{bad}` must fail at config load, not on every Seedream call"
+            );
+        }
+    }
 }
