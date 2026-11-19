@@ -611,7 +611,7 @@ mod tests {
             let failed = json!({ "task": { "status": st, "status_msg": "boom" } });
             match classify_poll(&failed) {
                 PollOutcome::Failed(reason) => {
-                    assert_eq!(reason, "boom", "failure reason comes from status_msg")
+                    assert_eq!(reason, "boom", "failure reason comes from status_msg");
                 }
                 _ => panic!("status={st} must classify as Failed"),
             }
