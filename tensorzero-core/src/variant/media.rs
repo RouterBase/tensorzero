@@ -38,6 +38,7 @@ use crate::minijinja_util::TemplateConfig;
 use crate::model::ModelTable;
 use crate::providers::amux::{AmuxMediaProxyConfig, AmuxProvider};
 use crate::providers::ark::{ArkMediaProxyConfig, ArkProvider};
+use crate::providers::hyper3d::{Hyper3dMediaProxyConfig, Hyper3dProvider};
 use crate::providers::minimax::{MinimaxMediaProxyConfig, MinimaxProvider};
 use crate::providers::novita::{NovitaMediaProxyConfig, NovitaProvider};
 use crate::providers::tripo::{TripoMediaProxyConfig, TripoProvider};
@@ -77,6 +78,7 @@ pub enum MediaProxyConfig {
     Amux(AmuxMediaProxyConfig),
     Minimax(MinimaxMediaProxyConfig),
     Tripo(TripoMediaProxyConfig),
+    Hyper3d(Hyper3dMediaProxyConfig),
     Ark(ArkMediaProxyConfig),
 }
 
@@ -148,6 +150,16 @@ impl Variant for MediaConfig {
                 }
                 MediaProxyConfig::Tripo(proxy) => {
                     TripoProvider::infer_media_proxy(
+                        proxy,
+                        inference_params.media_generation.callback_url.as_deref(),
+                        &media_input,
+                        &clients.http_client,
+                        &clients.credentials,
+                    )
+                    .await?
+                }
+                MediaProxyConfig::Hyper3d(proxy) => {
+                    Hyper3dProvider::infer_media_proxy(
                         proxy,
                         inference_params.media_generation.callback_url.as_deref(),
                         &media_input,
@@ -236,6 +248,7 @@ impl Variant for MediaConfig {
                 MediaProxyConfig::Amux(proxy) => &proxy.path,
                 MediaProxyConfig::Minimax(proxy) => &proxy.path,
                 MediaProxyConfig::Tripo(proxy) => &proxy.path,
+                MediaProxyConfig::Hyper3d(proxy) => &proxy.path,
                 MediaProxyConfig::Ark(proxy) => &proxy.path,
             };
             if path.is_empty() {
