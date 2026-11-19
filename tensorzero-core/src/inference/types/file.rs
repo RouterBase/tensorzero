@@ -56,6 +56,7 @@ use crate::{
     error::{Error, ErrorDetails, IMPOSSIBLE_ERROR_MESSAGE},
     http::TensorzeroHttpClient,
     inference::types::{resolved_input::LazyFile, stored_input::StoredFile},
+    public_url,
 };
 
 // Re-export wire types from tensorzero-types
@@ -91,7 +92,7 @@ pub trait FileExt {
 }
 
 impl FileExt for File {
-    async fn take_or_fetch(self, client: &TensorzeroHttpClient) -> Result<Base64File, Error> {
+    async fn take_or_fetch(self, _client: &TensorzeroHttpClient) -> Result<Base64File, Error> {
         match self {
             File::Url(url_file) => {
                 let UrlFile {
@@ -100,23 +101,39 @@ impl FileExt for File {
                     detail,
                     filename,
                 } = url_file;
-                let response = client.get(url.clone()).send().await.map_err(|e| {
+                // RouterBase: caller-supplied URLs must not reach internal
+                // addresses (SSRF), and fetch errors must not echo response
+                // bodies or socket errors back to the caller (they turn the
+                // gateway into a port scanner). Details go to the log only.
+                let fetch_failed = |e: &dyn std::fmt::Debug| {
+                    tracing::warn!(url = %url, error = ?e, "file URL fetch failed");
                     Error::new(ErrorDetails::BadFileFetch {
                         url: url.clone(),
-                        message: format!("Error fetching image: {e:?}"),
+                        message: "the file could not be downloaded (unreachable, refused, or not a public address)".to_string(),
+                    })
+                };
+                // (`TENSORZERO_ALLOW_PRIVATE_FILE_URLS` disables the checks for
+                // local development; the guarded client is used either way.)
+                public_url::check_url(&url).map_err(|reason| {
+                    Error::new(ErrorDetails::BadFileFetch {
+                        url: url.clone(),
+                        message: format!("URL is not allowed: {reason}"),
                     })
                 })?;
+                let guarded = public_url::client()
+                    .map_err(|message| Error::new(ErrorDetails::InternalError { message }))?;
+                let response = guarded
+                    .get(url.clone())
+                    .send()
+                    .await
+                    .map_err(|e| fetch_failed(&e))?;
 
                 // Check status code
                 let status = response.status();
                 if !status.is_success() {
-                    let error_body = response
-                        .text()
-                        .await
-                        .unwrap_or_else(|_| String::from("(unable to read response body)"));
                     return Err(Error::new(ErrorDetails::BadFileFetch {
                         url: url.clone(),
-                        message: format!("HTTP error {status}: {error_body}"),
+                        message: format!("HTTP error {status}"),
                     }));
                 }
 
