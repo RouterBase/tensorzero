@@ -22,6 +22,7 @@ pub mod model; // types and methods for working with TensorZero-supported models
 pub mod model_table;
 pub mod observability; // utilities for observability (logs, metrics, etc.)
 pub mod optimization;
+pub mod public_url; // RouterBase: SSRF guard for caller-supplied file URLs
 pub mod providers; // providers for the inference and / or optimization services TensorZero integrates
 pub mod rate_limiting; // utilities for rate limiting
 pub mod relay;
