@@ -236,6 +236,8 @@ mod tests {
         // `check_url`, so the redirect policy is what's under test.)
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        // Test-only server; nothing waits on it at shutdown.
+        #[expect(clippy::disallowed_methods)]
         tokio::spawn(async move {
             while let Ok((mut sock, _)) = listener.accept().await {
                 let mut buf = [0u8; 1024];

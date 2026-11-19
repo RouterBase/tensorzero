@@ -370,7 +370,6 @@ impl InputMessageContentExt for InputMessageContent {
                         // `LazyResolvedInputMessageContent::File`. We want to error immediately if the user tries
                         // to use a file input without explicitly configuring an object store (either explicit enabled or disabled)
                         let storage_kind = get_storage_kind(context)?;
-                        let client = context.client.clone();
                         // Construct a future that will actually fetch the file URL from the network.
                         // Important: we do *not* use `tokio::spawn` here. As a result, the future
                         // will not actually begin executing (including opening the network connection)
@@ -385,7 +384,7 @@ impl InputMessageContentExt for InputMessageContent {
                         let filename_for_future = filename.clone();
                         let filename_clone = filename.clone();
                         let delayed_file_future = async move {
-                            let base64_file = file.take_or_fetch(&client).await?;
+                            let base64_file = file.take_or_fetch().await?;
                             let path = storage_kind.file_path(&base64_file)?;
                             Ok(ObjectStorageFile {
                                 file: ObjectStoragePointer {

@@ -54,7 +54,6 @@ use serde::{Deserialize, Serialize};
 use super::{ContentBlock, RequestMessage};
 use crate::{
     error::{Error, ErrorDetails, IMPOSSIBLE_ERROR_MESSAGE},
-    http::TensorzeroHttpClient,
     inference::types::{resolved_input::LazyFile, stored_input::StoredFile},
     public_url,
 };
@@ -82,17 +81,15 @@ impl std::ops::Deref for PendingObjectStoreFile {
 /// Extension trait for File operations that require tensorzero-core dependencies.
 pub trait FileExt {
     /// Fetch the file content if needed and return as Base64File.
-    fn take_or_fetch(
-        self,
-        client: &TensorzeroHttpClient,
-    ) -> impl std::future::Future<Output = Result<Base64File, Error>> + Send;
+    /// URL files are downloaded with `public_url::client()` (RouterBase SSRF guard).
+    fn take_or_fetch(self) -> impl std::future::Future<Output = Result<Base64File, Error>> + Send;
 
     /// Convert to a StoredFile for database persistence.
     fn into_stored_file(self) -> Result<StoredFile, Error>;
 }
 
 impl FileExt for File {
-    async fn take_or_fetch(self, _client: &TensorzeroHttpClient) -> Result<Base64File, Error> {
+    async fn take_or_fetch(self) -> Result<Base64File, Error> {
         match self {
             File::Url(url_file) => {
                 let UrlFile {
