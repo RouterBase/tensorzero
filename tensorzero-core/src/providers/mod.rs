@@ -16,6 +16,7 @@ pub mod google_ai_studio_gemini;
 pub mod groq;
 pub mod helpers;
 pub mod helpers_thinking_block;
+pub mod hyper3d;
 pub mod hyperbolic;
 pub mod minimax;
 pub mod mistral;
