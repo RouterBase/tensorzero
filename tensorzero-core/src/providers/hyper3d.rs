@@ -258,10 +258,10 @@ async fn run_to_completion(
     for attempt in 1..=DOWNLOAD_ATTEMPTS {
         match download_listing(http_client, api_key, &submitted.uuid).await {
             Ok(listing) => {
-                let urls = pick_result_urls(&listing, format);
-                if !urls.is_empty() {
+                let files = pick_result_files(&listing, format);
+                if !files.is_empty() {
                     return Ok(TaskOutput {
-                        urls,
+                        files,
                         credits: submitted.credits,
                     });
                 }
@@ -712,11 +712,42 @@ fn extension_of(entry: &Value) -> Option<String> {
         .or_else(|| entry.get("url").and_then(Value::as_str).and_then(from))
 }
 
-/// The model file first (the requested `geometry_file_format`, else the first
-/// 3D file listed), then the first preview image. Nothing when no model file
-/// is listed: a preview alone is not a delivered model.
-fn pick_result_urls(listing: &Value, format: Option<&str>) -> Vec<String> {
-    let entries: Vec<(String, String)> = listing
+/// One delivered file: its URL, the name Hyper3D lists it under, and what it
+/// is: `model` (a 3D file), `preview` (a render image: an image whose name or
+/// URL says preview / render), `texture` (any other image, e.g. the maps that
+/// ship next to an `obj` / `stl`, which do not pack textures), `file` (the
+/// rest, e.g. an `.mtl`).
+#[derive(Debug, Clone, PartialEq)]
+struct ResultFile {
+    url: String,
+    name: Option<String>,
+    kind: &'static str,
+}
+
+fn kind_of(ext: &str, name_or_url: &str) -> &'static str {
+    if MODEL_EXTENSIONS.contains(&ext) {
+        "model"
+    } else if PREVIEW_EXTENSIONS.contains(&ext) {
+        let lower = name_or_url.to_ascii_lowercase();
+        if lower.contains("preview") || lower.contains("render") {
+            "preview"
+        } else {
+            "texture"
+        }
+    } else {
+        "file"
+    }
+}
+
+/// Every file Hyper3D lists, in a stable order: the model file first (the
+/// requested `geometry_file_format`, else the first 3D file listed), then the
+/// preview image, then everything else in listing order (Extreme-High's
+/// extra 10M-face mesh, Gen-1.5 HighPack's high-poly model, the second set for
+/// `material: All`, extra preview renders, textures). So `data[0]` stays the
+/// model and `data[1]` the preview when there is one. Nothing when no model
+/// file is listed: a preview alone is not a delivered model.
+fn pick_result_files(listing: &Value, format: Option<&str>) -> Vec<ResultFile> {
+    let entries: Vec<(String, ResultFile)> = listing
         .get("list")
         .and_then(Value::as_array)
         .map(|arr| {
@@ -726,35 +757,71 @@ fn pick_result_urls(listing: &Value, format: Option<&str>) -> Vec<String> {
                     if url.is_empty() {
                         return None;
                     }
-                    Some((extension_of(e).unwrap_or_default(), url.to_string()))
+                    let ext = extension_of(e).unwrap_or_default();
+                    let label = e.get("name").and_then(Value::as_str).unwrap_or(url);
+                    let file = ResultFile {
+                        url: url.to_string(),
+                        name: e
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|n| !n.is_empty())
+                            .map(str::to_string),
+                        kind: kind_of(&ext, label),
+                    };
+                    Some((ext, file))
                 })
                 .collect()
         })
         .unwrap_or_default();
     let model = format
-        .and_then(|f| entries.iter().find(|(ext, _)| ext == f))
-        .or_else(|| {
-            entries
-                .iter()
-                .find(|(ext, _)| MODEL_EXTENSIONS.contains(&ext.as_str()))
-        });
-    let Some((_, model)) = model else {
+        .and_then(|f| entries.iter().position(|(ext, _)| ext == f))
+        .or_else(|| entries.iter().position(|(_, f)| f.kind == "model"));
+    let Some(model) = model else {
         return Vec::new();
     };
+    // A named preview, else the first image (as before this listed every file).
     let preview = entries
         .iter()
-        .find(|(ext, _)| PREVIEW_EXTENSIONS.contains(&ext.as_str()))
-        .map(|(_, url)| url.clone());
-    std::iter::once(model.clone()).chain(preview).collect()
+        .position(|(_, f)| f.kind == "preview")
+        .or_else(|| entries.iter().position(|(_, f)| f.kind == "texture"));
+    let mut out: Vec<ResultFile> = Vec::with_capacity(entries.len());
+    let lead = std::iter::once(model).chain(preview);
+    let rest = (0..entries.len()).filter(|i| *i != model && Some(*i) != preview);
+    for i in lead.chain(rest) {
+        let file = &entries[i].1;
+        if !out.iter().any(|f| f.url == file.url) {
+            out.push(file.clone());
+        }
+    }
+    out
 }
 
 /// What a successful task delivered.
 #[derive(Debug, Default, PartialEq)]
 struct TaskOutput {
-    /// The model file first, then the preview image when present.
-    urls: Vec<String>,
+    /// Every listed file, ordered as [`pick_result_files`] documents.
+    files: Vec<ResultFile>,
     /// `consumed` at submit: the credits Hyper3D charged.
     credits: Option<f64>,
+}
+
+impl TaskOutput {
+    fn urls(&self) -> Vec<&str> {
+        self.files.iter().map(|f| f.url.as_str()).collect()
+    }
+
+    /// Per-file metadata for RouterBase's `resultItems` (one item per URL, in
+    /// the same order), which lands on each returned `data[i]`.
+    fn items(&self) -> Vec<Value> {
+        self.files
+            .iter()
+            .map(|f| match &f.name {
+                Some(name) => json!({ "kind": f.kind, "name": name }),
+                None => json!({ "kind": f.kind }),
+            })
+            .collect()
+    }
 }
 
 /// Success payload for RouterBase's media callback. The credits charged ride
@@ -766,12 +833,14 @@ fn media_callback_success_body(task_id: &str, result_json: &str, outcome: &TaskO
         "task_id": task_id,
         "state": "success",
         "resultJson": result_json,
-        "resultUrls": outcome.urls,
+        "resultUrls": outcome.urls(),
+        "resultItems": outcome.items(),
         "data": {
             "taskId": task_id,
             "task_id": task_id,
             "resultJson": result_json,
-            "resultUrls": outcome.urls,
+            "resultUrls": outcome.urls(),
+            "resultItems": outcome.items(),
         }
     });
     if let Some(credits) = outcome.credits {
@@ -788,7 +857,7 @@ async fn post_media_callback(
     task_id: &str,
     outcome: &TaskOutput,
 ) -> Result<(), Error> {
-    let result_json = json!({ "resultUrls": outcome.urls }).to_string();
+    let result_json = json!({ "resultUrls": outcome.urls() }).to_string();
     let body = media_callback_success_body(task_id, &result_json, outcome);
     let response = http_client
         .post(callback_url)
@@ -1022,38 +1091,66 @@ mod tests {
     }
 
     #[test]
-    fn results_list_the_requested_model_then_a_preview() {
+    fn results_list_the_requested_model_then_a_preview_then_every_other_file() {
         let listing = json!({ "list": [
             { "name": "preview.webp", "url": "https://dl.example/preview.webp?sig=1" },
             { "name": "base_basic_pbr.fbx", "url": "https://dl.example/m.fbx" },
             { "name": "base_basic_pbr.glb", "url": "https://dl.example/m.glb?sig=2" },
-            { "name": "texture_diffuse.png", "url": "https://dl.example/t.png" }
+            { "name": "texture_diffuse.png", "url": "https://dl.example/t.png" },
+            { "name": "high_10m.glb", "url": "https://dl.example/hi.glb" },
+            { "name": "base_basic_pbr.glb", "url": "https://dl.example/m.glb?sig=2" }
         ]});
+        let urls = |files: Vec<ResultFile>| files.into_iter().map(|f| f.url).collect::<Vec<_>>();
         assert_eq!(
-            pick_result_urls(&listing, Some("glb")),
+            urls(pick_result_files(&listing, Some("glb"))),
             vec![
-                "https://dl.example/m.glb?sig=2".to_string(),
-                "https://dl.example/preview.webp?sig=1".to_string()
+                "https://dl.example/m.glb?sig=2",
+                "https://dl.example/preview.webp?sig=1",
+                "https://dl.example/m.fbx",
+                "https://dl.example/t.png",
+                "https://dl.example/hi.glb",
             ],
-            "the requested format comes first, the preview second"
+            "requested model, then the preview, then every other file once, in listing order"
         );
+        let files = pick_result_files(&listing, Some("glb"));
         assert_eq!(
-            pick_result_urls(&listing, None)[0],
+            files.iter().map(|f| f.kind).collect::<Vec<_>>(),
+            vec!["model", "preview", "model", "texture", "model"],
+            "a texture map is not a preview; extra meshes stay models"
+        );
+        assert_eq!(files[0].name.as_deref(), Some("base_basic_pbr.glb"));
+        assert_eq!(
+            pick_result_files(&listing, None)[0].url,
             "https://dl.example/m.fbx",
             "without a requested format the first 3D file wins"
         );
         let preview_only =
             json!({ "list": [ { "name": "preview.webp", "url": "https://x/p.webp" } ] });
         assert!(
-            pick_result_urls(&preview_only, Some("glb")).is_empty(),
+            pick_result_files(&preview_only, Some("glb")).is_empty(),
             "a preview without a model is not a delivered model"
         );
-        let nameless = json!({ "list": [ { "url": "https://x/out/model.glb?x=1" } ] });
+        let nameless = json!({ "list": [
+            { "url": "https://x/out/model.glb?x=1" },
+            { "url": "https://x/out/model.mtl" }
+        ] });
+        let files = pick_result_files(&nameless, None);
         assert_eq!(
-            pick_result_urls(&nameless, None),
-            vec!["https://x/out/model.glb?x=1".to_string()],
-            "the extension falls back to the URL path"
+            files[0].url, "https://x/out/model.glb?x=1",
+            "extension from the URL path"
         );
+        assert_eq!(files[0].name, None);
+        assert_eq!(
+            files[1].kind, "file",
+            "an obj material file is a plain file"
+        );
+        // No named preview: the first image stands in, as before.
+        let unnamed = json!({ "list": [
+            { "name": "m.glb", "url": "https://x/m.glb" },
+            { "name": "shot.png", "url": "https://x/shot.png" }
+        ] });
+        let files = pick_result_files(&unnamed, Some("glb"));
+        assert_eq!(files[1].url, "https://x/shot.png");
     }
 
     #[test]
@@ -1071,7 +1168,18 @@ mod tests {
     #[test]
     fn success_callback_carries_credits_as_usage() {
         let outcome = TaskOutput {
-            urls: vec!["https://x/m.glb".into()],
+            files: vec![
+                ResultFile {
+                    url: "https://x/m.glb".into(),
+                    name: Some("base.glb".into()),
+                    kind: "model",
+                },
+                ResultFile {
+                    url: "https://x/p.webp".into(),
+                    name: None,
+                    kind: "preview",
+                },
+            ],
             credits: Some(2.5),
         };
         let body = media_callback_success_body("t1", "{}", &outcome);
@@ -1081,6 +1189,16 @@ mod tests {
             "credits ride as usage.credits"
         );
         assert_eq!(body["data"]["usage"]["credits"], 2.5);
+        assert_eq!(
+            body["resultUrls"],
+            json!(["https://x/m.glb", "https://x/p.webp"])
+        );
+        assert_eq!(
+            body["resultItems"],
+            json!([{ "kind": "model", "name": "base.glb" }, { "kind": "preview" }]),
+            "one item per URL, same order"
+        );
+        assert_eq!(body["data"]["resultItems"], body["resultItems"]);
         let none = media_callback_success_body("t1", "{}", &TaskOutput::default());
         assert!(none.get("usage").is_none(), "no credits, no usage");
     }
