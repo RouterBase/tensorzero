@@ -59,7 +59,9 @@ pub enum MinimaxRequestShape {
     #[serde(rename = "minimax_h3_text_to_video")]
     MinimaxH3TextToVideo,
     /// MiniMax-H3 image-to-video: same endpoint plus a `first_frame`
-    /// `{type:image_url}` block (remapped from `image_urls[0]`).
+    /// `{type:image_url}` block (remapped from `image_urls[0]`) and, when the
+    /// caller sends one, a `last_frame` block (`last_frame_url`, or
+    /// `image_urls[1]`).
     #[serde(rename = "minimax_h3_image_to_video")]
     MinimaxH3ImageToVideo,
     /// MiniMax-H3 reference-to-video (subject/character reference): same
@@ -200,7 +202,7 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 /// Build the `POST /v2/video_generation` body. `model` is the upstream id
 /// carried in `proxy.path` (e.g. `MiniMax-H3`). The prompt becomes a single
 /// `text` content block; image-to-video adds a `first_frame` `image_url`
-/// block. `duration` (integer seconds) and `resolution` forward verbatim;
+/// block, plus a `last_frame` block when an end frame is supplied. `duration` (integer seconds) and `resolution` forward verbatim;
 /// RouterBase's `aspect_ratio` field is mapped to MiniMax's upstream `ratio`.
 fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result<Value, Error> {
     let prompt = input
@@ -249,6 +251,20 @@ fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result
         }));
     }
 
+    // Image-to-video end frame. MiniMax pairs a `last_frame` block with the
+    // `first_frame` above (every H3 tier: H3, Highspeed, Lite, Max), and the
+    // clip's ratio then follows the images (`adaptive`). Accept the field
+    // names the other video providers use, or a second `image_urls` entry.
+    if matches!(shape, MinimaxRequestShape::MinimaxH3ImageToVideo)
+        && let Some(last) = last_frame(input)
+    {
+        content.push(json!({
+            "type": "image_url",
+            "role": "last_frame",
+            "image_url": { "url": last },
+        }));
+    }
+
     let mut body = serde_json::Map::new();
     body.insert("model".into(), Value::from(model));
     body.insert("content".into(), Value::Array(content));
@@ -285,6 +301,22 @@ fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result
     }
 
     Ok(Value::Object(body))
+}
+
+/// The image-to-video end frame: `last_frame_url` (the RouterBase schema
+/// field), the `end_image` / `last_image` aliases, or `image_urls[1]`.
+fn last_frame(input: &Value) -> Option<&str> {
+    ["last_frame_url", "end_image", "last_image"]
+        .iter()
+        .find_map(|key| input.get(*key).and_then(Value::as_str))
+        .or_else(|| {
+            input
+                .get("image_urls")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.get(1))
+                .and_then(Value::as_str)
+        })
+        .filter(|url| !url.is_empty())
 }
 
 /// Extract the result video URL from a completed MiniMax status response.
@@ -565,6 +597,84 @@ mod tests {
         assert_eq!(
             img["image_url"]["url"], "https://cdn.example/frame.png",
             "image_url must be a nested {{url}} object, not a bare string"
+        );
+    }
+
+    #[test]
+    fn build_body_image_to_video_adds_last_frame() {
+        let input = json!({
+            "prompt": "the girl grows up",
+            "image_urls": ["https://cdn.example/first.png"],
+            "last_frame_url": "https://cdn.example/last.png",
+            "duration": 5,
+        });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3ImageToVideo,
+            "MiniMax-H3-Lite",
+            &input,
+        )
+        .unwrap();
+        let content = body["content"].as_array().unwrap();
+        assert_eq!(content.len(), 3, "text + first_frame + last_frame blocks");
+        assert_eq!(
+            content[1]["role"], "first_frame",
+            "image_urls[0] stays the first frame"
+        );
+        assert_eq!(
+            content[2]["role"], "last_frame",
+            "last_frame_url becomes the last frame"
+        );
+        assert_eq!(
+            content[2]["image_url"]["url"], "https://cdn.example/last.png",
+            "the last frame is a nested {{url}} object like the first"
+        );
+
+        let two_images = json!({
+            "prompt": "the girl grows up",
+            "image_urls": ["https://cdn.example/first.png", "https://cdn.example/second.png"],
+        });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3ImageToVideo,
+            "MiniMax-H3-Lite",
+            &two_images,
+        )
+        .unwrap();
+        assert_eq!(
+            body["content"][2]["image_url"]["url"], "https://cdn.example/second.png",
+            "a second image_urls entry is the last frame"
+        );
+    }
+
+    #[test]
+    fn build_body_without_end_frame_sends_first_frame_only() {
+        let input = json!({ "prompt": "p", "image_urls": ["https://cdn.example/a.png"] });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3ImageToVideo,
+            "MiniMax-H3",
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            body["content"].as_array().unwrap().len(),
+            2,
+            "no end frame supplied, so no last_frame block"
+        );
+
+        let r2v = json!({
+            "prompt": "p",
+            "image_urls": ["https://cdn.example/a.png"],
+            "last_frame_url": "https://cdn.example/b.png",
+        });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3ReferenceToVideo,
+            "MiniMax-H3",
+            &r2v,
+        )
+        .unwrap();
+        assert_eq!(
+            body["content"].as_array().unwrap().len(),
+            2,
+            "reference-to-video never sends a last_frame: MiniMax rejects mixing the two roles"
         );
     }
 
