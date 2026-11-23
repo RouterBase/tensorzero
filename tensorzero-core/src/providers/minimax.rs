@@ -65,9 +65,11 @@ pub enum MinimaxRequestShape {
     #[serde(rename = "minimax_h3_image_to_video")]
     MinimaxH3ImageToVideo,
     /// MiniMax-H3 reference-to-video (subject/character reference): same
-    /// endpoint plus a `reference_image` `{type:image_url}` block (remapped
-    /// from `image_urls[0]`), so the referenced subject is preserved across
-    /// the whole clip. Differs from image-to-video only in the block `role`.
+    /// endpoint plus one `reference_image` `{type:image_url}` block per
+    /// `image_urls` entry and one `reference_audio` `{type:audio_url}` block
+    /// per `audio_urls` entry, so the referenced subjects are preserved across
+    /// the whole clip. Reference videos are not forwarded: MiniMax bills them
+    /// per input second, which the RouterBase hold does not price.
     #[serde(rename = "minimax_h3_reference_to_video")]
     MinimaxH3ReferenceToVideo,
 }
@@ -203,7 +205,9 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 /// carried in `proxy.path` (e.g. `MiniMax-H3`). The prompt becomes a single
 /// `text` content block; image-to-video adds a `first_frame` `image_url`
 /// block, plus a `last_frame` block when an end frame is supplied. `duration` (integer seconds) and `resolution` forward verbatim;
-/// RouterBase's `aspect_ratio` field is mapped to MiniMax's upstream `ratio`.
+/// RouterBase's `aspect_ratio` field is mapped to MiniMax's upstream `ratio`;
+/// `generate_audio` forwards as a bool and `prompt_expansion_mode` (H3-Max)
+/// as `extra.prompt_expansion_mode`.
 fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result<Value, Error> {
     let prompt = input
         .get("prompt")
@@ -217,38 +221,41 @@ fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result
 
     let mut content: Vec<Value> = vec![json!({ "type": "text", "text": prompt })];
 
-    // image-to-video seeds the opening frame; reference-to-video supplies a
-    // subject/character reference kept across the clip. Both forward the input
-    // image as an `image_url` content block; only the `role` differs.
-    let image_role = match shape {
-        MinimaxRequestShape::MinimaxH3TextToVideo => None,
-        MinimaxRequestShape::MinimaxH3ImageToVideo => Some("first_frame"),
-        MinimaxRequestShape::MinimaxH3ReferenceToVideo => Some("reference_image"),
-    };
-    if let Some(role) = image_role {
-        let image = input
-            .get("image")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                input
-                    .get("image_urls")
-                    .and_then(Value::as_array)
-                    .and_then(|arr| arr.first())
-                    .and_then(Value::as_str)
-            })
-            .ok_or_else(|| {
-                Error::new(ErrorDetails::InvalidRequest {
-                    message: format!("MiniMax {role} video requires an image_urls[0] image URL"),
-                })
-            })?;
-        // MiniMax's `/v2/video_generation` content blocks take `image_url` as a
-        // NESTED object `{ "url": ... }` (OpenAI-style), NOT a bare string — a
-        // bare string is rejected by the strict upstream parameter whitelist.
-        content.push(json!({
-            "type": "image_url",
-            "role": role,
-            "image_url": { "url": image },
-        }));
+    // image-to-video seeds the opening frame from `image_urls[0]`;
+    // reference-to-video sends every `image_urls` entry as a subject/character
+    // reference kept across the clip. Both forward each image as an
+    // `image_url` content block; only the `role` differs.
+    match shape {
+        MinimaxRequestShape::MinimaxH3TextToVideo => {}
+        MinimaxRequestShape::MinimaxH3ImageToVideo => {
+            let image = input
+                .get("image")
+                .and_then(Value::as_str)
+                .or_else(|| image_urls(input).next())
+                .ok_or_else(|| missing_image("first_frame"))?;
+            content.push(image_block("first_frame", image));
+        }
+        MinimaxRequestShape::MinimaxH3ReferenceToVideo => {
+            let images: Vec<&str> = match input.get("image").and_then(Value::as_str) {
+                Some(image) => vec![image],
+                None => image_urls(input).collect(),
+            };
+            if images.is_empty() {
+                return Err(missing_image("reference_image"));
+            }
+            for image in images {
+                content.push(image_block("reference_image", image));
+            }
+            // Reference audio (free on MiniMax's price list). Reference videos
+            // are deliberately NOT forwarded: they bill per input second.
+            for audio in string_array(input, "audio_urls") {
+                content.push(json!({
+                    "type": "audio_url",
+                    "role": "reference_audio",
+                    "audio_url": { "url": audio },
+                }));
+            }
+        }
     }
 
     // Image-to-video end frame. MiniMax pairs a `last_frame` block with the
@@ -258,11 +265,7 @@ fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result
     if matches!(shape, MinimaxRequestShape::MinimaxH3ImageToVideo)
         && let Some(last) = last_frame(input)
     {
-        content.push(json!({
-            "type": "image_url",
-            "role": "last_frame",
-            "image_url": { "url": last },
-        }));
+        content.push(image_block("last_frame", last));
     }
 
     let mut body = serde_json::Map::new();
@@ -300,7 +303,68 @@ fn build_body(shape: &MinimaxRequestShape, model: &str, input: &Value) -> Result
         body.insert("ratio".into(), value.clone());
     }
 
+    // `generate_audio` (MiniMax default true = clip with audio, false =
+    // silent). Accept a JSON bool or its string form.
+    if let Some(generate_audio) = input.get("generate_audio").and_then(as_bool) {
+        body.insert("generate_audio".into(), Value::from(generate_audio));
+    }
+
+    // H3-Max prompt expansion (`disabled` / `balanced` / `quality`). MiniMax
+    // nests it under `extra`, which is `additionalProperties: false`, so
+    // nothing else goes in there. The schema only offers it on Max rows.
+    if let Some(mode) = input
+        .get("prompt_expansion_mode")
+        .and_then(Value::as_str)
+        .filter(|mode| !mode.is_empty())
+    {
+        body.insert("extra".into(), json!({ "prompt_expansion_mode": mode }));
+    }
+
     Ok(Value::Object(body))
+}
+
+/// An `image_url` content block. MiniMax's `/v2/video_generation` takes
+/// `image_url` as a NESTED object `{ "url": ... }` (OpenAI-style), NOT a bare
+/// string: a bare string is rejected by the strict upstream whitelist.
+fn image_block(role: &str, url: &str) -> Value {
+    json!({
+        "type": "image_url",
+        "role": role,
+        "image_url": { "url": url },
+    })
+}
+
+fn missing_image(role: &str) -> Error {
+    Error::new(ErrorDetails::InvalidRequest {
+        message: format!("MiniMax {role} video requires an image_urls[0] image URL"),
+    })
+}
+
+/// Non-empty string entries of the `key` array (missing or non-array = none).
+fn string_array<'a>(input: &'a Value, key: &str) -> impl Iterator<Item = &'a str> {
+    input
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|url| !url.is_empty())
+}
+
+fn image_urls(input: &Value) -> impl Iterator<Item = &str> {
+    string_array(input, "image_urls")
+}
+
+fn as_bool(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(b) => Some(*b),
+        Value::String(s) => match s.trim() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The image-to-video end frame: `last_frame_url` (the RouterBase schema
@@ -700,6 +764,137 @@ mod tests {
         assert_eq!(
             img["image_url"]["url"], "https://cdn.example/subject.png",
             "image_url must be a nested {{url}} object, not a bare string"
+        );
+    }
+
+    #[test]
+    fn build_body_reference_to_video_forwards_every_image_and_audio() {
+        let input = json!({
+            "prompt": "the two characters meet",
+            "image_urls": ["https://cdn.example/a.png", "https://cdn.example/b.png"],
+            "audio_urls": ["https://cdn.example/voice.mp3"],
+            "video_urls": ["https://cdn.example/motion.mp4"],
+        });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3ReferenceToVideo,
+            "MiniMax-H3",
+            &input,
+        )
+        .unwrap();
+        let content = body["content"].as_array().unwrap();
+        assert_eq!(
+            content.len(),
+            4,
+            "text + two reference images + one reference audio; no video block"
+        );
+        assert_eq!(content[1]["role"], "reference_image");
+        assert_eq!(
+            content[2]["image_url"]["url"], "https://cdn.example/b.png",
+            "every image_urls entry becomes a reference_image"
+        );
+        assert_eq!(content[3]["type"], "audio_url");
+        assert_eq!(
+            content[3]["role"], "reference_audio",
+            "audio_urls entries become reference_audio blocks"
+        );
+        assert_eq!(
+            content[3]["audio_url"]["url"], "https://cdn.example/voice.mp3",
+            "audio_url is a nested {{url}} object like image_url"
+        );
+        assert!(
+            content.iter().all(|c| c["type"] != "video_url"),
+            "reference videos bill per input second upstream, so they are never forwarded"
+        );
+    }
+
+    #[test]
+    fn build_body_image_to_video_ignores_audio_urls() {
+        let input = json!({
+            "prompt": "p",
+            "image_urls": ["https://cdn.example/a.png"],
+            "audio_urls": ["https://cdn.example/voice.mp3"],
+        });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3ImageToVideo,
+            "MiniMax-H3",
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            body["content"].as_array().unwrap().len(),
+            2,
+            "image-to-video cannot carry reference roles: MiniMax rejects mixing them"
+        );
+    }
+
+    #[test]
+    fn build_body_forwards_generate_audio() {
+        let silent = json!({ "prompt": "p", "generate_audio": false });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3TextToVideo,
+            "MiniMax-H3",
+            &silent,
+        )
+        .unwrap();
+        assert_eq!(
+            body["generate_audio"], false,
+            "generate_audio=false must reach MiniMax as a JSON bool"
+        );
+
+        let stringly = json!({ "prompt": "p", "generate_audio": "true" });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3TextToVideo,
+            "MiniMax-H3",
+            &stringly,
+        )
+        .unwrap();
+        assert_eq!(
+            body["generate_audio"], true,
+            "a string \"true\" is coerced to a bool"
+        );
+
+        let absent = json!({ "prompt": "p" });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3TextToVideo,
+            "MiniMax-H3",
+            &absent,
+        )
+        .unwrap();
+        assert!(
+            body.get("generate_audio").is_none(),
+            "absent generate_audio is left to MiniMax's default"
+        );
+    }
+
+    #[test]
+    fn build_body_nests_prompt_expansion_mode_under_extra() {
+        let input = json!({ "prompt": "p", "prompt_expansion_mode": "disabled" });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3TextToVideo,
+            "MiniMax-H3-Max",
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            body["extra"],
+            json!({ "prompt_expansion_mode": "disabled" }),
+            "prompt_expansion_mode is MiniMax's extra.prompt_expansion_mode, alone in extra"
+        );
+        assert!(
+            body.get("prompt_expansion_mode").is_none(),
+            "it is not a top-level MiniMax field"
+        );
+
+        let absent = json!({ "prompt": "p" });
+        let body = build_body(
+            &MinimaxRequestShape::MinimaxH3TextToVideo,
+            "MiniMax-H3-Max",
+            &absent,
+        )
+        .unwrap();
+        assert!(
+            body.get("extra").is_none(),
+            "no extra object without a mode"
         );
     }
 
