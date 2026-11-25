@@ -11,6 +11,8 @@ use url::Url;
 use crate::endpoints::inference::InferenceCredentials;
 use crate::error::{Error, ErrorDetails};
 use crate::http::TensorzeroHttpClient;
+use crate::providers::media_task::{MediaTaskCheck, failure_callback_body, server_error_text};
+use crate::utils::spawn_ignoring_shutdown;
 
 const PROVIDER_NAME: &str = "MiniMax";
 const PROVIDER_TYPE: &str = "minimax";
@@ -43,6 +45,12 @@ pub struct MinimaxMediaProxyConfig {
     /// which is sent in the request body — the endpoints are fixed
     /// (`/v2/video_generation`), unlike Novita's per-model URL path.
     pub path: Arc<str>,
+    /// Return the upstream task id as soon as the submit is accepted and
+    /// finish (poll + media callback) in the background. Without it the
+    /// inference call blocks for the whole render, which holds RouterBase's
+    /// submit open for minutes and hides the task id until the end, so a
+    /// dropped connection or a gateway restart loses a task that is still
+    /// rendering (and billed) upstream.
     #[serde(default)]
     pub async_submission: bool,
     pub request_shape: MinimaxRequestShape,
@@ -169,6 +177,17 @@ impl MinimaxProvider {
             })?
             .to_string();
 
+        if proxy.async_submission {
+            let http_client_bg = http_client.clone();
+            let api_key_bg = api_key.expose_secret().to_string();
+            let callback_url_bg = callback_url.to_string();
+            let task_id_bg = task_id.clone();
+            spawn_ignoring_shutdown(async move {
+                finish_task(&http_client_bg, &api_key_bg, &callback_url_bg, &task_id_bg).await;
+            });
+            return Ok(task_id);
+        }
+
         let result_body = poll_async_result(http_client, api_key.expose_secret(), &task_id).await?;
 
         let urls = parse_urls(&result_body);
@@ -183,6 +202,127 @@ impl MinimaxProvider {
 
         post_media_callback(http_client, callback_url, &task_id, &urls).await?;
         Ok(task_id)
+    }
+
+    /// Read a submitted task once (see [`crate::providers::media_task`]). A
+    /// status that cannot be read is an `Err`, never a failed task: the
+    /// upstream may still be rendering.
+    pub async fn check_media_task(
+        task_id: &str,
+        http_client: &TensorzeroHttpClient,
+        dynamic_api_keys: &InferenceCredentials,
+    ) -> Result<MediaTaskCheck, Error> {
+        let api_key = get_api_key(dynamic_api_keys)?;
+        let unavailable = |reason: String| {
+            Error::new(ErrorDetails::InferenceServer {
+                message: format!("MiniMax task status unavailable: {reason}"),
+                provider_type: PROVIDER_TYPE.to_string(),
+                raw_request: None,
+                raw_response: None,
+            })
+        };
+        let response = http_client
+            .get(poll_url(task_id))
+            .bearer_auth(api_key.expose_secret())
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| unavailable(e.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(unavailable(format!("HTTP {status}")));
+        }
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|e| unavailable(format!("unparseable response: {e}")))?;
+        check_from_poll(task_id, &body)
+    }
+}
+
+fn poll_url(task_id: &str) -> String {
+    format!("{}/v2/query/video_generation/{task_id}", *MINIMAX_API_BASE)
+}
+
+/// Turn one poll body into a [`MediaTaskCheck`], with the same callback
+/// bodies [`finish_task`] delivers.
+fn check_from_poll(task_id: &str, body: &Value) -> Result<MediaTaskCheck, Error> {
+    Ok(match classify_poll(body) {
+        PollOutcome::Pending => MediaTaskCheck::Pending,
+        PollOutcome::Failed(reason) => MediaTaskCheck::Finished(failure_callback_body(
+            task_id,
+            &server_error_text(
+                PROVIDER_TYPE,
+                &format!("MiniMax generation failed: {reason}"),
+            ),
+        )),
+        PollOutcome::Done => {
+            let urls = parse_urls(body);
+            if urls.is_empty() {
+                MediaTaskCheck::Finished(failure_callback_body(task_id, NO_MEDIA_MESSAGE))
+            } else {
+                MediaTaskCheck::Finished(success_callback_body(task_id, &urls)?)
+            }
+        }
+    })
+}
+
+/// What the caller is told when a task finishes without a video.
+const NO_MEDIA_MESSAGE: &str = "Generation completed but returned no media";
+
+/// Poll a submitted task to a terminal state and report it to RouterBase.
+/// Runs detached, after the task id was already returned.
+async fn finish_task(
+    http_client: &TensorzeroHttpClient,
+    api_key: &str,
+    callback_url: &str,
+    task_id: &str,
+) {
+    match poll_async_result(http_client, api_key, task_id).await {
+        Ok(result_body) => {
+            let urls = parse_urls(&result_body);
+            if urls.is_empty() {
+                tracing::error!("MiniMax task {task_id} completed but returned no video URL");
+                post_media_callback_failure(http_client, callback_url, task_id, NO_MEDIA_MESSAGE)
+                    .await;
+            } else if let Err(e) =
+                post_media_callback(http_client, callback_url, task_id, &urls).await
+            {
+                tracing::error!(
+                    "Failed to deliver success callback for MiniMax task {task_id}: {e}"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::error!("MiniMax task {task_id} failed: {e}");
+            post_media_callback_failure(http_client, callback_url, task_id, &e.to_string()).await;
+        }
+    }
+}
+
+/// Report a task that failed after its `task_id` was already returned.
+/// Best-effort: runs detached, so a delivery failure can only be logged.
+async fn post_media_callback_failure(
+    http_client: &TensorzeroHttpClient,
+    callback_url: &str,
+    task_id: &str,
+    error_message: &str,
+) {
+    let body = failure_callback_body(task_id, error_message);
+    match http_client.post(callback_url).json(&body).send().await {
+        Ok(response) if response.status().is_success() => {}
+        Ok(response) => {
+            let status = response.status();
+            let raw = response.text().await.unwrap_or_default();
+            tracing::error!(
+                "RouterBase media failure-callback returned {status} for task {task_id}: {raw}"
+            );
+        }
+        Err(e) => {
+            tracing::error!(
+                "RouterBase media failure-callback request failed for task {task_id}: {e}"
+            );
+        }
     }
 }
 
@@ -462,7 +602,7 @@ async fn poll_async_result(
     api_key: &str,
     task_id: &str,
 ) -> Result<Value, Error> {
-    let url = format!("{}/v2/query/video_generation/{task_id}", *MINIMAX_API_BASE);
+    let url = poll_url(task_id);
     let deadline = Instant::now() + ASYNC_TASK_TIMEOUT;
     // MiniMax recommends ~10s poll intervals.
     let poll_interval = Duration::from_secs(10);
@@ -532,18 +672,14 @@ async fn poll_async_result(
     }
 }
 
-async fn post_media_callback(
-    http_client: &TensorzeroHttpClient,
-    callback_url: &str,
-    task_id: &str,
-    urls: &[String],
-) -> Result<(), Error> {
+/// The success callback body for a finished task.
+fn success_callback_body(task_id: &str, urls: &[String]) -> Result<Value, Error> {
     let result_json = serde_json::to_string(&json!({ "resultUrls": urls })).map_err(|e| {
         Error::new(ErrorDetails::Serialization {
             message: format!("Failed to serialize callback payload: {e}"),
         })
     })?;
-    let body = json!({
+    Ok(json!({
         "taskId": task_id,
         "task_id": task_id,
         "state": "success",
@@ -555,7 +691,16 @@ async fn post_media_callback(
             "resultJson": result_json,
             "resultUrls": urls,
         }
-    });
+    }))
+}
+
+async fn post_media_callback(
+    http_client: &TensorzeroHttpClient,
+    callback_url: &str,
+    task_id: &str,
+    urls: &[String],
+) -> Result<(), Error> {
+    let body = success_callback_body(task_id, urls)?;
     let response = http_client
         .post(callback_url)
         .json(&body)
@@ -931,6 +1076,60 @@ mod tests {
             parse_urls(&body),
             vec!["https://cdn/x.mp4".to_string()],
             "the completed video URL must be read from task.content.url"
+        );
+    }
+}
+
+#[cfg(test)]
+mod media_task_check_tests {
+    use super::*;
+
+    fn finished(check: MediaTaskCheck) -> Value {
+        match check {
+            MediaTaskCheck::Finished(body) => body,
+            other => panic!("expected a finished task, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_running_task_is_pending() {
+        let poll = json!({ "task": { "status": "processing" } });
+        assert_eq!(
+            check_from_poll("t1", &poll).unwrap(),
+            MediaTaskCheck::Pending
+        );
+    }
+
+    #[test]
+    fn a_finished_task_carries_the_callback_the_poller_would_send() {
+        let poll =
+            json!({ "task": { "status": "succeeded", "content": { "url": "https://x/v.mp4" } } });
+        let expected = success_callback_body("t1", &["https://x/v.mp4".to_string()]).unwrap();
+        let body = finished(check_from_poll("t1", &poll).unwrap());
+        assert_eq!(
+            body, expected,
+            "byte-for-byte the poller's success callback"
+        );
+        assert_eq!(body["state"], "success");
+        assert_eq!(body["data"]["resultUrls"][0], "https://x/v.mp4");
+    }
+
+    #[test]
+    fn a_finished_task_without_a_video_is_a_failure() {
+        let poll = json!({ "task": { "status": "succeeded", "content": {} } });
+        let body = finished(check_from_poll("t1", &poll).unwrap());
+        assert_eq!(body["state"], "fail");
+        assert_eq!(body["errorMessage"], NO_MEDIA_MESSAGE);
+    }
+
+    #[test]
+    fn a_failed_task_reports_the_poller_s_error_text() {
+        let poll = json!({ "task": { "status": "failed", "status_msg": "policy" } });
+        let body = finished(check_from_poll("t1", &poll).unwrap());
+        assert_eq!(body["state"], "fail");
+        assert_eq!(
+            body["data"]["failMsg"],
+            "Error from minimax server: MiniMax generation failed: policy"
         );
     }
 }

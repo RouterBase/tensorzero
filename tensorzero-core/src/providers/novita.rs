@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::endpoints::inference::InferenceCredentials;
 use crate::error::{Error, ErrorDetails};
 use crate::http::TensorzeroHttpClient;
+use crate::providers::media_task::{MediaTaskCheck, failure_callback_body, server_error_text};
 use crate::utils::spawn_ignoring_shutdown;
 
 const PROVIDER_NAME: &str = "Novita";
@@ -258,6 +259,54 @@ pub enum NovitaRequestShape {
 }
 
 impl NovitaProvider {
+    /// Read a submitted task once (see [`crate::providers::media_task`]). A
+    /// status that cannot be read is an `Err`, never a failed task: the
+    /// upstream may still be rendering.
+    pub async fn check_media_task(
+        proxy: &NovitaMediaProxyConfig,
+        task_id: &str,
+        http_client: &TensorzeroHttpClient,
+        dynamic_api_keys: &InferenceCredentials,
+    ) -> Result<MediaTaskCheck, Error> {
+        let unavailable = |reason: String| {
+            Error::new(ErrorDetails::InferenceServer {
+                message: format!("Novita task status unavailable: {reason}"),
+                provider_type: PROVIDER_TYPE.to_string(),
+                raw_request: None,
+                raw_response: None,
+            })
+        };
+        let api_key = get_api_key(dynamic_api_keys)?;
+        if let Some(protocol) = original_factory_protocol(&proxy.request_shape) {
+            let url = poll_url(protocol, NOVITA_API_BASE.as_str(), task_id);
+            let body = poll_once(protocol, http_client, api_key.expose_secret(), &url)
+                .await
+                .map_err(unavailable)?;
+            return check_original_factory(protocol, task_id, &body);
+        }
+        if !proxy.async_submission {
+            // Inline endpoints answer on the submit itself; the ids they
+            // return are local, with no upstream task behind them.
+            return Ok(MediaTaskCheck::Unsupported);
+        }
+        let response = http_client
+            .get(async_result_url(task_id))
+            .bearer_auth(api_key.expose_secret())
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| unavailable(e.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(unavailable(format!("HTTP {status}")));
+        }
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|e| unavailable(format!("unparseable response: {e}")))?;
+        check_async_result(task_id, &body)
+    }
+
     pub async fn infer_media_proxy(
         proxy: &NovitaMediaProxyConfig,
         callback_url: Option<&str>,
@@ -407,7 +456,7 @@ impl NovitaProvider {
                                 &http_client_bg,
                                 &callback_url_bg,
                                 &task_id_bg,
-                                "Generation completed but returned no media",
+                                NO_MEDIA_MESSAGE,
                             )
                             .await;
                         } else if let Err(e) = post_media_callback(
@@ -1764,10 +1813,7 @@ async fn poll_async_result(
     api_key: &str,
     task_id: &str,
 ) -> Result<Value, Error> {
-    let url = format!(
-        "{}/v3/async/task-result?task_id={task_id}",
-        *NOVITA_API_BASE
-    );
+    let url = async_result_url(task_id);
     let deadline = Instant::now() + ASYNC_TASK_TIMEOUT;
     let poll_interval = Duration::from_secs(4);
 
@@ -1819,31 +1865,107 @@ async fn poll_async_result(
             }));
         }
 
-        let status_str = body
-            .get("task")
-            .and_then(|task| task.get("status"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let normalized = status_str.to_uppercase();
-        if normalized.contains("SUCCEED") || normalized == "SUCCESS" {
-            return Ok(body);
-        }
-        if normalized.contains("FAIL") || normalized == "FAILED" {
-            let reason = body
-                .get("task")
-                .and_then(|task| task.get("reason").or_else(|| task.get("message")))
-                .and_then(Value::as_str)
-                .unwrap_or("(no reason given)");
-            return Err(Error::new(ErrorDetails::InferenceServer {
-                message: format!("Novita generation failed: {reason}"),
-                provider_type: PROVIDER_TYPE.to_string(),
-                raw_request: None,
-                raw_response: Some(body.to_string()),
-            }));
+        match classify_async_result(&body) {
+            AsyncOutcome::Done => return Ok(body),
+            AsyncOutcome::Failed(reason) => {
+                return Err(Error::new(ErrorDetails::InferenceServer {
+                    message: format!("Novita generation failed: {reason}"),
+                    provider_type: PROVIDER_TYPE.to_string(),
+                    raw_request: None,
+                    raw_response: Some(body.to_string()),
+                }));
+            }
+            AsyncOutcome::Pending => {}
         }
 
         tokio::time::sleep(poll_interval).await;
     }
+}
+
+fn async_result_url(task_id: &str) -> String {
+    format!(
+        "{}/v3/async/task-result?task_id={task_id}",
+        *NOVITA_API_BASE
+    )
+}
+
+/// Where a `/v3/async/task-result` body says the task stands.
+#[derive(Debug, PartialEq)]
+enum AsyncOutcome {
+    Done,
+    Failed(String),
+    Pending,
+}
+
+fn classify_async_result(body: &Value) -> AsyncOutcome {
+    let status_str = body
+        .get("task")
+        .and_then(|task| task.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let normalized = status_str.to_uppercase();
+    if normalized.contains("SUCCEED") || normalized == "SUCCESS" {
+        return AsyncOutcome::Done;
+    }
+    if normalized.contains("FAIL") {
+        let reason = body
+            .get("task")
+            .and_then(|task| task.get("reason").or_else(|| task.get("message")))
+            .and_then(Value::as_str)
+            .unwrap_or("(no reason given)");
+        return AsyncOutcome::Failed(reason.to_string());
+    }
+    AsyncOutcome::Pending
+}
+
+/// What the caller is told when a task finishes without any media.
+const NO_MEDIA_MESSAGE: &str = "Generation completed but returned no media";
+
+/// One `/v3/async/task-result` body as a [`MediaTaskCheck`], with the same
+/// callback bodies the detached poller delivers.
+fn check_async_result(task_id: &str, body: &Value) -> Result<MediaTaskCheck, Error> {
+    Ok(match classify_async_result(body) {
+        AsyncOutcome::Pending => MediaTaskCheck::Pending,
+        AsyncOutcome::Failed(reason) => MediaTaskCheck::Finished(failure_callback_body(
+            task_id,
+            &server_error_text(
+                PROVIDER_TYPE,
+                &format!("Novita generation failed: {reason}"),
+            ),
+        )),
+        AsyncOutcome::Done => {
+            let urls = parse_urls(body);
+            if urls.is_empty() {
+                MediaTaskCheck::Finished(failure_callback_body(task_id, NO_MEDIA_MESSAGE))
+            } else {
+                MediaTaskCheck::Finished(success_callback_body(task_id, &urls, None)?)
+            }
+        }
+    })
+}
+
+/// One original-factory poll body as a [`MediaTaskCheck`]. Wan's `UNKNOWN`
+/// (a task its status API does not know yet, or no longer) stays pending
+/// here: only the poller knows how long ago the task was submitted.
+fn check_original_factory(
+    protocol: Protocol,
+    task_id: &str,
+    body: &Value,
+) -> Result<MediaTaskCheck, Error> {
+    Ok(match classify_poll(protocol, body) {
+        PollOutcome::Pending | PollOutcome::Unknown(_) => MediaTaskCheck::Pending,
+        PollOutcome::Failed(reason) => {
+            MediaTaskCheck::Finished(failure_callback_body(task_id, &reason))
+        }
+        PollOutcome::Done(output) if output.urls.is_empty() => {
+            MediaTaskCheck::Finished(failure_callback_body(task_id, NO_MEDIA_MESSAGE))
+        }
+        PollOutcome::Done(output) => MediaTaskCheck::Finished(success_callback_body(
+            task_id,
+            &output.urls,
+            output.usage.as_ref(),
+        )?),
+    })
 }
 
 /// Success payload for RouterBase's media callback. `usage` is the upstream's
@@ -1875,6 +1997,25 @@ fn media_callback_success_body(
     body
 }
 
+/// The success callback body for a finished task.
+fn success_callback_body(
+    task_id: &str,
+    urls: &[String],
+    usage: Option<&Value>,
+) -> Result<Value, Error> {
+    let result_json = serde_json::to_string(&json!({ "resultUrls": urls })).map_err(|e| {
+        Error::new(ErrorDetails::Serialization {
+            message: format!("Failed to serialize callback payload: {e}"),
+        })
+    })?;
+    Ok(media_callback_success_body(
+        task_id,
+        &result_json,
+        urls,
+        usage,
+    ))
+}
+
 async fn post_media_callback(
     http_client: &TensorzeroHttpClient,
     callback_url: &str,
@@ -1882,12 +2023,7 @@ async fn post_media_callback(
     urls: &[String],
     usage: Option<&Value>,
 ) -> Result<(), Error> {
-    let result_json = serde_json::to_string(&json!({ "resultUrls": urls })).map_err(|e| {
-        Error::new(ErrorDetails::Serialization {
-            message: format!("Failed to serialize callback payload: {e}"),
-        })
-    })?;
-    let body = media_callback_success_body(task_id, &result_json, urls, usage);
+    let body = success_callback_body(task_id, urls, usage)?;
     let response = http_client
         .post(callback_url)
         .json(&body)
@@ -1929,17 +2065,7 @@ async fn post_media_callback_failure(
     task_id: &str,
     error_message: &str,
 ) {
-    let body = json!({
-        "taskId": task_id,
-        "task_id": task_id,
-        "state": "fail",
-        "errorMessage": error_message,
-        "data": {
-            "taskId": task_id,
-            "task_id": task_id,
-            "failMsg": error_message,
-        }
-    });
+    let body = failure_callback_body(task_id, error_message);
     match http_client.post(callback_url).json(&body).send().await {
         Ok(response) if response.status().is_success() => {}
         Ok(response) => {
@@ -2648,13 +2774,7 @@ async fn finish_task(
     match poll_until_done(protocol, http_client, api_key, poll_url, task_id).await {
         Ok(output) if output.urls.is_empty() => {
             tracing::error!("Novita task {task_id} completed but returned no video URL");
-            post_media_callback_failure(
-                http_client,
-                callback_url,
-                task_id,
-                "Generation completed but returned no media",
-            )
-            .await;
+            post_media_callback_failure(http_client, callback_url, task_id, NO_MEDIA_MESSAGE).await;
         }
         Ok(output) => deliver_success(http_client, callback_url, task_id, &output).await,
         Err(reason) => {
@@ -3715,5 +3835,112 @@ mod kling_wan_tests {
             "UNKNOWN is reported apart from a failure: the poller keeps polling it \
              within WAN_UNKNOWN_GRACE of submit, since the status API can lag"
         );
+    }
+}
+
+#[cfg(test)]
+mod media_task_check_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn finished(check: MediaTaskCheck) -> Value {
+        match check {
+            MediaTaskCheck::Finished(body) => body,
+            other => panic!("expected a finished task, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn async_result_statuses_classify_as_the_poller_reads_them() {
+        for (status, expected) in [
+            ("TASK_STATUS_SUCCEED", AsyncOutcome::Done),
+            ("success", AsyncOutcome::Done),
+            ("TASK_STATUS_QUEUED", AsyncOutcome::Pending),
+            ("TASK_STATUS_PROCESSING", AsyncOutcome::Pending),
+            ("", AsyncOutcome::Pending),
+        ] {
+            assert_eq!(
+                classify_async_result(&json!({ "task": { "status": status } })),
+                expected,
+                "status `{status}`"
+            );
+        }
+        assert_eq!(
+            classify_async_result(
+                &json!({ "task": { "status": "TASK_STATUS_FAILED", "reason": "nsfw" } })
+            ),
+            AsyncOutcome::Failed("nsfw".to_string())
+        );
+        assert_eq!(
+            classify_async_result(&json!({ "task": { "status": "TASK_STATUS_FAILED" } })),
+            AsyncOutcome::Failed("(no reason given)".to_string())
+        );
+    }
+
+    #[test]
+    fn a_finished_async_task_carries_the_callback_the_poller_would_send() {
+        let poll = json!({
+            "task": { "status": "TASK_STATUS_SUCCEED" },
+            "videos": [{ "video_url": "https://x/v.mp4" }]
+        });
+        let expected = success_callback_body("t1", &["https://x/v.mp4".to_string()], None).unwrap();
+        assert_eq!(finished(check_async_result("t1", &poll).unwrap()), expected);
+    }
+
+    #[test]
+    fn a_finished_async_task_without_media_is_a_failure() {
+        let poll = json!({ "task": { "status": "TASK_STATUS_SUCCEED" } });
+        let body = finished(check_async_result("t1", &poll).unwrap());
+        assert_eq!(body["state"], "fail");
+        assert_eq!(body["errorMessage"], NO_MEDIA_MESSAGE);
+    }
+
+    #[test]
+    fn a_failed_async_task_reports_the_poller_s_error_text() {
+        let poll = json!({ "task": { "status": "TASK_STATUS_FAILED", "reason": "nsfw" } });
+        let body = finished(check_async_result("t1", &poll).unwrap());
+        assert_eq!(
+            body["data"]["failMsg"],
+            "Error from novita server: Novita generation failed: nsfw"
+        );
+    }
+
+    #[test]
+    fn an_original_factory_task_carries_urls_and_billed_seconds() {
+        let poll = json!({"code": 0, "data": [{"id": "k1", "status": "succeeded",
+            "outputs": [{"type": "video", "url": "https://r/v.mp4", "duration": "10.041"}],
+            "usage": {"input_duration": 8}}]});
+        let body = finished(check_original_factory(Protocol::Kling, "k1", &poll).unwrap());
+        assert_eq!(body["state"], "success");
+        assert_eq!(body["resultUrls"][0], "https://r/v.mp4");
+        assert_eq!(
+            body["usage"],
+            json!({"input_seconds": 8.0, "output_seconds": 10.041}),
+            "second-billed models settle from the same usage as on the callback"
+        );
+    }
+
+    #[test]
+    fn an_original_factory_failure_keeps_the_upstream_s_own_message() {
+        let poll = json!({"code": 0, "data": [{"id": "k1", "status": "failed", "message": "billing settlement failed"}]});
+        let body = finished(check_original_factory(Protocol::Kling, "k1", &poll).unwrap());
+        assert_eq!(body["state"], "fail");
+        assert_eq!(body["errorMessage"], "billing settlement failed");
+    }
+
+    #[test]
+    fn running_and_unknown_original_factory_tasks_stay_pending() {
+        for poll in [
+            json!({"output": {"task_id": "w1", "task_status": "RUNNING"}}),
+            // Wan's status API does not know the task (yet, or any more).
+            // Only the poller knows the task's age, so a check never ends it.
+            json!({"output": {"task_id": "w1", "task_status": "UNKNOWN"}}),
+        ] {
+            assert_eq!(
+                check_original_factory(Protocol::Wan, "w1", &poll).unwrap(),
+                MediaTaskCheck::Pending,
+                "{poll}"
+            );
+        }
     }
 }

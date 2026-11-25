@@ -42,6 +42,10 @@ pub fn build_internal_non_otel_enabled_routes() -> Router<AppStateData> {
             get(endpoints::internal::inference_count::get_inference_with_feedback_count_handler),
         )
         .route(
+            "/internal/media/task_status",
+            post(endpoints::internal::media_task::media_task_status_handler),
+        )
+        .route(
             "/internal/feedback/{target_id}",
             get(endpoints::feedback::internal::get_feedback_by_target_id_handler),
         )

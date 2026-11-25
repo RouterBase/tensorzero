@@ -26,6 +26,7 @@ use url::Url;
 use crate::endpoints::inference::InferenceCredentials;
 use crate::error::{Error, ErrorDetails};
 use crate::http::TensorzeroHttpClient;
+use crate::providers::media_task::{MediaTaskCheck, failure_callback_body, server_error_text};
 use crate::utils::spawn_ignoring_shutdown;
 
 const PROVIDER_NAME: &str = "Tripo";
@@ -223,6 +224,53 @@ impl TripoProvider {
         post_media_callback(http_client, callback_url, &task_id, &outcome).await?;
         Ok(task_id)
     }
+
+    /// Read a submitted task once (see [`crate::providers::media_task`]). A
+    /// status that cannot be read is an `Err`, never a failed task: the
+    /// upstream may still be rendering.
+    pub async fn check_media_task(
+        task_id: &str,
+        http_client: &TensorzeroHttpClient,
+        dynamic_api_keys: &InferenceCredentials,
+    ) -> Result<MediaTaskCheck, Error> {
+        let api_key = get_api_key(dynamic_api_keys)?;
+        let url = format!("{}/v3/tasks/{task_id}", *TRIPO_API_BASE);
+        let body = poll_once(http_client, api_key.expose_secret(), &url)
+            .await
+            .map_err(|e| {
+                let (PollError::Transient(reason) | PollError::Rejected(reason)) = e;
+                Error::new(ErrorDetails::InferenceServer {
+                    message: format!("Tripo task status unavailable: {reason}"),
+                    provider_type: PROVIDER_TYPE.to_string(),
+                    raw_request: None,
+                    raw_response: None,
+                })
+            })?;
+        check_from_poll(task_id, &body)
+    }
+}
+
+/// Turn one poll body into a [`MediaTaskCheck`], with the same callback
+/// bodies [`finish_task`] delivers.
+fn check_from_poll(task_id: &str, body: &Value) -> Result<MediaTaskCheck, Error> {
+    Ok(match classify_poll(body) {
+        PollOutcome::Pending => MediaTaskCheck::Pending,
+        PollOutcome::Failed(reason) => MediaTaskCheck::Finished(failure_callback_body(
+            task_id,
+            &server_error_text(PROVIDER_TYPE, &format!("Tripo generation failed: {reason}")),
+        )),
+        PollOutcome::Done => {
+            let outcome = TaskOutput::from_task(body);
+            if outcome.urls.is_empty() {
+                MediaTaskCheck::Finished(failure_callback_body(
+                    task_id,
+                    "Generation completed but returned no model",
+                ))
+            } else {
+                MediaTaskCheck::Finished(success_callback_body(task_id, &outcome)?)
+            }
+        }
+    })
 }
 
 /// Poll a submitted task to a terminal state and report it to RouterBase.
@@ -590,19 +638,24 @@ fn media_callback_success_body(task_id: &str, result_json: &str, outcome: &TaskO
     body
 }
 
-async fn post_media_callback(
-    http_client: &TensorzeroHttpClient,
-    callback_url: &str,
-    task_id: &str,
-    outcome: &TaskOutput,
-) -> Result<(), Error> {
+/// The success callback body for a finished task.
+fn success_callback_body(task_id: &str, outcome: &TaskOutput) -> Result<Value, Error> {
     let result_json =
         serde_json::to_string(&json!({ "resultUrls": outcome.urls })).map_err(|e| {
             Error::new(ErrorDetails::Serialization {
                 message: format!("Failed to serialize callback payload: {e}"),
             })
         })?;
-    let body = media_callback_success_body(task_id, &result_json, outcome);
+    Ok(media_callback_success_body(task_id, &result_json, outcome))
+}
+
+async fn post_media_callback(
+    http_client: &TensorzeroHttpClient,
+    callback_url: &str,
+    task_id: &str,
+    outcome: &TaskOutput,
+) -> Result<(), Error> {
+    let body = success_callback_body(task_id, outcome)?;
     let response = http_client
         .post(callback_url)
         .json(&body)
@@ -639,17 +692,7 @@ async fn post_media_callback_failure(
     task_id: &str,
     error_message: &str,
 ) {
-    let body = json!({
-        "taskId": task_id,
-        "task_id": task_id,
-        "state": "fail",
-        "errorMessage": error_message,
-        "data": {
-            "taskId": task_id,
-            "task_id": task_id,
-            "failMsg": error_message,
-        }
-    });
+    let body = failure_callback_body(task_id, error_message);
     match http_client.post(callback_url).json(&body).send().await {
         Ok(response) if response.status().is_success() => {}
         Ok(response) => {
@@ -870,5 +913,67 @@ mod tests {
         let v = json!({ "code": 2010, "message": "Insufficient credit", "suggestion": "Top up" });
         assert_eq!(envelope_message(&v), "Insufficient credit (Top up)");
         assert_eq!(envelope_message(&json!({})), "(no reason given)");
+    }
+}
+
+#[cfg(test)]
+mod media_task_check_tests {
+    use super::*;
+
+    fn finished(check: MediaTaskCheck) -> Value {
+        match check {
+            MediaTaskCheck::Finished(body) => body,
+            other => panic!("expected a finished task, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_running_task_is_pending() {
+        let body = json!({ "code": 0, "data": { "status": "running" } });
+        assert_eq!(
+            check_from_poll("t1", &body).unwrap(),
+            MediaTaskCheck::Pending
+        );
+    }
+
+    #[test]
+    fn a_finished_task_carries_the_callback_the_poller_would_send() {
+        let poll = json!({ "code": 0, "data": {
+            "status": "success",
+            "credits_consumed": 40,
+            "output": { "model_url": "https://x/m.glb", "rendered_image_url": "https://x/p.png" }
+        }});
+        let outcome = TaskOutput::from_task(&poll);
+        let expected = success_callback_body("t1", &outcome).unwrap();
+        let body = finished(check_from_poll("t1", &poll).unwrap());
+        assert_eq!(
+            body, expected,
+            "byte-for-byte the poller's success callback"
+        );
+        assert_eq!(body["state"], "success");
+        assert_eq!(body["resultUrls"][0], "https://x/m.glb");
+        assert_eq!(body["usage"]["credits"], 40.0);
+    }
+
+    #[test]
+    fn a_finished_task_without_a_model_is_a_failure() {
+        let poll = json!({ "code": 0, "data": { "status": "success", "output": {} } });
+        let body = finished(check_from_poll("t1", &poll).unwrap());
+        assert_eq!(body["state"], "fail");
+        assert_eq!(
+            body["errorMessage"],
+            "Generation completed but returned no model"
+        );
+    }
+
+    #[test]
+    fn a_failed_task_reports_the_poller_s_error_text() {
+        let poll = json!({ "code": 0, "data": { "status": "banned", "error_message": "nsfw" } });
+        let body = finished(check_from_poll("t1", &poll).unwrap());
+        assert_eq!(body["state"], "fail");
+        assert_eq!(
+            body["data"]["failMsg"],
+            "Error from tripo server: Tripo generation failed: nsfw"
+        );
     }
 }

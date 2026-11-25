@@ -27,6 +27,9 @@ use url::Url;
 use crate::endpoints::inference::InferenceCredentials;
 use crate::error::{Error, ErrorDetails};
 use crate::http::TensorzeroHttpClient;
+use crate::providers::media_task::{
+    MediaSubmission, MediaTaskCheck, failure_callback_body, server_error_text,
+};
 use crate::public_url;
 use crate::utils::spawn_ignoring_shutdown;
 
@@ -139,7 +142,7 @@ impl Hyper3dProvider {
         input: &Value,
         http_client: &TensorzeroHttpClient,
         dynamic_api_keys: &InferenceCredentials,
-    ) -> Result<String, Error> {
+    ) -> Result<MediaSubmission, Error> {
         let callback_url = callback_url.ok_or_else(|| {
             Error::new(ErrorDetails::InvalidRequest {
                 message: "media proxy requires a callback_url".to_string(),
@@ -187,6 +190,14 @@ impl Hyper3dProvider {
             })
         })?;
         let task_id = submitted.uuid.clone();
+        let format = requested_format(input);
+        // The status endpoint is keyed by the subscription key, not the task
+        // uuid, and the credits charged are only on the submit response: a
+        // later check needs all three back.
+        let submission = MediaSubmission {
+            task_id: task_id.clone(),
+            resume: Some(resume_state(&submitted, format.as_deref())),
+        };
 
         if proxy.async_submission {
             // Return the task id now and finish out-of-band: holding the
@@ -195,7 +206,6 @@ impl Hyper3dProvider {
             let http_client_bg = http_client.clone();
             let api_key_bg = api_key.expose_secret().to_string();
             let callback_url_bg = callback_url.to_string();
-            let format = requested_format(input);
             spawn_ignoring_shutdown(async move {
                 finish_task(
                     &http_client_bg,
@@ -206,19 +216,111 @@ impl Hyper3dProvider {
                 )
                 .await;
             });
-            return Ok(task_id);
+            return Ok(submission);
         }
 
         let outcome = run_to_completion(
             http_client,
             api_key.expose_secret(),
             &submitted,
-            requested_format(input).as_deref(),
+            format.as_deref(),
         )
         .await?;
         post_media_callback(http_client, callback_url, &task_id, &outcome).await?;
-        Ok(task_id)
+        Ok(submission)
     }
+
+    /// Read a submitted task once (see [`crate::providers::media_task`]).
+    /// `resume` is the state the submit returned; without it (a task
+    /// submitted before the gateway returned one) there is nothing to read.
+    /// A status that cannot be read is an `Err`, never a failed task.
+    pub async fn check_media_task(
+        task_id: &str,
+        resume: Option<&Value>,
+        http_client: &TensorzeroHttpClient,
+        dynamic_api_keys: &InferenceCredentials,
+    ) -> Result<MediaTaskCheck, Error> {
+        let Some((submitted, format)) = resume.and_then(|r| parse_resume_state(task_id, r)) else {
+            return Ok(MediaTaskCheck::Unsupported);
+        };
+        let unavailable = |e: CallError| {
+            let (CallError::Transient(reason) | CallError::Rejected(reason)) = e;
+            Error::new(ErrorDetails::InferenceServer {
+                message: format!("Hyper3D task status unavailable: {reason}"),
+                provider_type: PROVIDER_TYPE.to_string(),
+                raw_request: None,
+                raw_response: None,
+            })
+        };
+        let api_key = get_api_key(dynamic_api_keys)?;
+        let key = api_key.expose_secret();
+        let payload = json!({ "subscription_key": submitted.subscription_key });
+        let status = post_json(http_client, key, "status", &payload)
+            .await
+            .map_err(unavailable)?;
+        match classify_status(&status) {
+            PollOutcome::Pending => Ok(MediaTaskCheck::Pending),
+            PollOutcome::Failed(reason) => Ok(MediaTaskCheck::Finished(failure_callback_body(
+                task_id,
+                &server_error_text(
+                    PROVIDER_TYPE,
+                    &format!("Hyper3D generation failed: {reason}"),
+                ),
+            ))),
+            PollOutcome::Done => {
+                let listing = post_json(
+                    http_client,
+                    key,
+                    "download",
+                    &json!({ "task_uuid": submitted.uuid }),
+                )
+                .await
+                .map_err(unavailable)?;
+                let files = pick_result_files(&listing, format.as_deref());
+                if files.is_empty() {
+                    // The listing can trail the status by a few seconds; the
+                    // next check reads it again.
+                    return Ok(MediaTaskCheck::Pending);
+                }
+                let outcome = TaskOutput {
+                    files,
+                    credits: submitted.credits,
+                };
+                Ok(MediaTaskCheck::Finished(success_callback_body(
+                    task_id, &outcome,
+                )))
+            }
+        }
+    }
+}
+
+/// The state a later status check needs, as RouterBase stores it.
+fn resume_state(submitted: &Submitted, format: Option<&str>) -> Value {
+    json!({
+        "subscription_key": submitted.subscription_key,
+        "credits": submitted.credits,
+        "format": format,
+    })
+}
+
+/// Rebuild the submission from [`resume_state`]. `None` when the subscription
+/// key is missing: nothing can be read without it.
+fn parse_resume_state(task_id: &str, resume: &Value) -> Option<(Submitted, Option<String>)> {
+    let subscription_key = resume
+        .get("subscription_key")
+        .and_then(Value::as_str)
+        .filter(|k| !k.is_empty())?
+        .to_string();
+    let submitted = Submitted {
+        uuid: task_id.to_string(),
+        subscription_key,
+        credits: resume.get("credits").and_then(Value::as_f64),
+    };
+    let format = resume
+        .get("format")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some((submitted, format))
 }
 
 /// Poll a submitted task to a terminal state and report it to RouterBase.
@@ -851,14 +953,19 @@ fn media_callback_success_body(task_id: &str, result_json: &str, outcome: &TaskO
     body
 }
 
+/// The success callback body for a finished task.
+fn success_callback_body(task_id: &str, outcome: &TaskOutput) -> Value {
+    let result_json = json!({ "resultUrls": outcome.urls() }).to_string();
+    media_callback_success_body(task_id, &result_json, outcome)
+}
+
 async fn post_media_callback(
     http_client: &TensorzeroHttpClient,
     callback_url: &str,
     task_id: &str,
     outcome: &TaskOutput,
 ) -> Result<(), Error> {
-    let result_json = json!({ "resultUrls": outcome.urls() }).to_string();
-    let body = media_callback_success_body(task_id, &result_json, outcome);
+    let body = success_callback_body(task_id, outcome);
     let response = http_client
         .post(callback_url)
         .json(&body)
@@ -894,17 +1001,7 @@ async fn post_media_callback_failure(
     task_id: &str,
     error_message: &str,
 ) {
-    let body = json!({
-        "taskId": task_id,
-        "task_id": task_id,
-        "state": "fail",
-        "errorMessage": error_message,
-        "data": {
-            "taskId": task_id,
-            "task_id": task_id,
-            "failMsg": error_message,
-        }
-    });
+    let body = failure_callback_body(task_id, error_message);
     match http_client.post(callback_url).json(&body).send().await {
         Ok(response) if response.status().is_success() => {}
         Ok(response) => {
@@ -1201,5 +1298,38 @@ mod tests {
         assert_eq!(body["data"]["resultItems"], body["resultItems"]);
         let none = media_callback_success_body("t1", "{}", &TaskOutput::default());
         assert!(none.get("usage").is_none(), "no credits, no usage");
+    }
+}
+
+#[cfg(test)]
+mod media_task_check_tests {
+    use super::*;
+
+    #[test]
+    fn resume_state_round_trips_everything_a_check_needs() {
+        let submitted = Submitted {
+            uuid: "task-uuid".to_string(),
+            subscription_key: "sub-key".to_string(),
+            credits: Some(0.5),
+        };
+        let resume = resume_state(&submitted, Some("fbx"));
+        let (back, format) = parse_resume_state("task-uuid", &resume).unwrap();
+        assert_eq!(back, submitted);
+        assert_eq!(format.as_deref(), Some("fbx"));
+    }
+
+    #[test]
+    fn resume_state_without_optional_parts_still_parses() {
+        let resume = json!({ "subscription_key": "sub-key", "credits": null, "format": null });
+        let (back, format) = parse_resume_state("u", &resume).unwrap();
+        assert_eq!(back.credits, None);
+        assert_eq!(format, None);
+    }
+
+    #[test]
+    fn without_a_subscription_key_there_is_nothing_to_read() {
+        for resume in [json!({}), json!({ "subscription_key": "" }), json!(null)] {
+            assert!(parse_resume_state("u", &resume).is_none(), "{resume}");
+        }
     }
 }

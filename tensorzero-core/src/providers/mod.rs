@@ -18,6 +18,7 @@ pub mod helpers;
 pub mod helpers_thinking_block;
 pub mod hyper3d;
 pub mod hyperbolic;
+pub mod media_task;
 pub mod minimax;
 pub mod mistral;
 pub mod novita;

@@ -39,6 +39,7 @@ use crate::model::ModelTable;
 use crate::providers::amux::{AmuxMediaProxyConfig, AmuxProvider};
 use crate::providers::ark::{ArkMediaProxyConfig, ArkProvider};
 use crate::providers::hyper3d::{Hyper3dMediaProxyConfig, Hyper3dProvider};
+use crate::providers::media_task::{MediaSubmission, MediaTaskCheck};
 use crate::providers::minimax::{MinimaxMediaProxyConfig, MinimaxProvider};
 use crate::providers::novita::{NovitaMediaProxyConfig, NovitaProvider};
 use crate::providers::tripo::{TripoMediaProxyConfig, TripoProvider};
@@ -92,6 +93,39 @@ impl MediaConfig {
     }
 }
 
+impl MediaConfig {
+    /// Read a task this variant submitted earlier, once. See
+    /// [`crate::providers::media_task`].
+    pub async fn check_task(
+        &self,
+        task_id: &str,
+        resume: Option<&serde_json::Value>,
+        http_client: &crate::http::TensorzeroHttpClient,
+        credentials: &crate::endpoints::inference::InferenceCredentials,
+    ) -> Result<MediaTaskCheck, Error> {
+        match &self.proxy {
+            Some(MediaProxyConfig::Novita(proxy)) => {
+                NovitaProvider::check_media_task(proxy, task_id, http_client, credentials).await
+            }
+            Some(MediaProxyConfig::Amux(proxy)) if proxy.async_submission => {
+                AmuxProvider::check_media_task(task_id, http_client, credentials).await
+            }
+            Some(MediaProxyConfig::Minimax(proxy)) if proxy.async_submission => {
+                MinimaxProvider::check_media_task(task_id, http_client, credentials).await
+            }
+            Some(MediaProxyConfig::Tripo(proxy)) if proxy.async_submission => {
+                TripoProvider::check_media_task(task_id, http_client, credentials).await
+            }
+            Some(MediaProxyConfig::Hyper3d(proxy)) if proxy.async_submission => {
+                Hyper3dProvider::check_media_task(task_id, resume, http_client, credentials).await
+            }
+            // Inline submits (and Ark, which is inline only) hold the caller
+            // until the media is back: there is no task left to read.
+            _ => Ok(MediaTaskCheck::Unsupported),
+        }
+    }
+}
+
 impl Variant for MediaConfig {
     async fn infer(
         &self,
@@ -116,48 +150,44 @@ impl Variant for MediaConfig {
             media_input = serde_json::json!({ "prompt": prompt });
         }
 
-        let task_id = match &self.proxy {
+        let submission: MediaSubmission = match &self.proxy {
             Some(proxy) => match proxy {
-                MediaProxyConfig::Novita(proxy) => {
-                    NovitaProvider::infer_media_proxy(
-                        proxy,
-                        inference_params.media_generation.callback_url.as_deref(),
-                        &media_input,
-                        &clients.http_client,
-                        &clients.credentials,
-                    )
-                    .await?
-                }
-                MediaProxyConfig::Amux(proxy) => {
-                    AmuxProvider::infer_media_proxy(
-                        proxy,
-                        inference_params.media_generation.callback_url.as_deref(),
-                        &media_input,
-                        &clients.http_client,
-                        &clients.credentials,
-                    )
-                    .await?
-                }
-                MediaProxyConfig::Minimax(proxy) => {
-                    MinimaxProvider::infer_media_proxy(
-                        proxy,
-                        inference_params.media_generation.callback_url.as_deref(),
-                        &media_input,
-                        &clients.http_client,
-                        &clients.credentials,
-                    )
-                    .await?
-                }
-                MediaProxyConfig::Tripo(proxy) => {
-                    TripoProvider::infer_media_proxy(
-                        proxy,
-                        inference_params.media_generation.callback_url.as_deref(),
-                        &media_input,
-                        &clients.http_client,
-                        &clients.credentials,
-                    )
-                    .await?
-                }
+                MediaProxyConfig::Novita(proxy) => NovitaProvider::infer_media_proxy(
+                    proxy,
+                    inference_params.media_generation.callback_url.as_deref(),
+                    &media_input,
+                    &clients.http_client,
+                    &clients.credentials,
+                )
+                .await?
+                .into(),
+                MediaProxyConfig::Amux(proxy) => AmuxProvider::infer_media_proxy(
+                    proxy,
+                    inference_params.media_generation.callback_url.as_deref(),
+                    &media_input,
+                    &clients.http_client,
+                    &clients.credentials,
+                )
+                .await?
+                .into(),
+                MediaProxyConfig::Minimax(proxy) => MinimaxProvider::infer_media_proxy(
+                    proxy,
+                    inference_params.media_generation.callback_url.as_deref(),
+                    &media_input,
+                    &clients.http_client,
+                    &clients.credentials,
+                )
+                .await?
+                .into(),
+                MediaProxyConfig::Tripo(proxy) => TripoProvider::infer_media_proxy(
+                    proxy,
+                    inference_params.media_generation.callback_url.as_deref(),
+                    &media_input,
+                    &clients.http_client,
+                    &clients.credentials,
+                )
+                .await?
+                .into(),
                 MediaProxyConfig::Hyper3d(proxy) => {
                     Hyper3dProvider::infer_media_proxy(
                         proxy,
@@ -168,16 +198,15 @@ impl Variant for MediaConfig {
                     )
                     .await?
                 }
-                MediaProxyConfig::Ark(proxy) => {
-                    ArkProvider::infer_media_proxy(
-                        proxy,
-                        inference_params.media_generation.callback_url.as_deref(),
-                        &media_input,
-                        &clients.http_client,
-                        &clients.credentials,
-                    )
-                    .await?
-                }
+                MediaProxyConfig::Ark(proxy) => ArkProvider::infer_media_proxy(
+                    proxy,
+                    inference_params.media_generation.callback_url.as_deref(),
+                    &media_input,
+                    &clients.http_client,
+                    &clients.credentials,
+                )
+                .await?
+                .into(),
             },
             None => {
                 return Err(Error::new(ErrorDetails::Config {
@@ -189,8 +218,15 @@ impl Variant for MediaConfig {
             }
         };
 
-        // Serialize the task_id as a JSON string so RouterBase can parse it.
-        let response_text = serde_json::to_string(&serde_json::json!({ "task_id": task_id }))
+        // Serialize the task id (and, when the provider needs more than the id
+        // to read the task again, its resume state) as a JSON string so
+        // RouterBase can parse it.
+        let task_id = &submission.task_id;
+        let mut response = serde_json::json!({ "task_id": task_id });
+        if let Some(resume) = &submission.resume {
+            response["resume"] = resume.clone();
+        }
+        let response_text = serde_json::to_string(&response)
             .unwrap_or_else(|_| format!(r#"{{"task_id":"{task_id}"}}"#));
 
         Ok(InferenceResult::Chat(ChatInferenceResult {
