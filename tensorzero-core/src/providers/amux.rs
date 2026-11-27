@@ -63,9 +63,17 @@ pub enum AmuxRequestShape {
     Seedance2TextToVideo,
     /// Seedance image-to-video: same v3 endpoint plus a first-frame
     /// `{type:"image_url", role:"first_frame"}` content item (remapped from
-    /// `image` / `image_urls[0]`).
+    /// `image` / `image_urls[0]`) and, when `last_frame_url` is given, a
+    /// `role:"last_frame"` item (first-last-frame mode).
     #[serde(rename = "seedance2_image_to_video")]
     Seedance2ImageToVideo,
+    /// Seedance multimodal reference-to-video: same v3 endpoint, with every
+    /// `image_urls` entry as a `reference_image` item, every `video_urls`
+    /// entry as a `reference_video` item and every `audio_urls` entry as a
+    /// `reference_audio` item. Reference mode cannot be mixed with a first
+    /// frame upstream, so no `first_frame` item is ever sent here.
+    #[serde(rename = "seedance2_reference_to_video")]
+    Seedance2ReferenceToVideo,
 }
 
 impl AmuxProvider {
@@ -156,7 +164,8 @@ impl AmuxProvider {
             }));
         }
 
-        post_media_callback(http_client, callback_url, &task_id, &urls).await?;
+        let usage = task_usage(&result_body);
+        post_media_callback(http_client, callback_url, &task_id, &urls, usage.as_ref()).await?;
         Ok(task_id)
     }
 }
@@ -224,6 +233,29 @@ fn build_body(shape: &AmuxRequestShape, model: &str, input: &Value) -> Result<Va
             "image_url": { "url": first_frame },
             "role": "first_frame",
         }));
+        // Optional last frame (Ark first-last-frame mode).
+        if let Some(last_frame) = input
+            .get("last_frame_url")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+        {
+            content.push(json!({
+                "type": "image_url",
+                "image_url": { "url": last_frame },
+                "role": "last_frame",
+            }));
+        }
+    }
+    if matches!(shape, AmuxRequestShape::Seedance2ReferenceToVideo) {
+        let references = reference_items(input);
+        if references.is_empty() {
+            return Err(Error::new(ErrorDetails::InvalidRequest {
+                message: "Amux reference-to-video requires at least one reference image, video or audio URL"
+                    .to_string(),
+            }));
+        }
+        content.extend(references);
     }
     body.insert("content".into(), Value::Array(content));
 
@@ -256,6 +288,63 @@ fn build_body(shape: &AmuxRequestShape, model: &str, input: &Value) -> Result<Va
     }
 
     Ok(Value::Object(body))
+}
+
+/// Every URL in `input[field]`, whether a single string or an array of them;
+/// blank entries are dropped.
+fn urls_in(input: &Value, field: &str) -> Vec<String> {
+    match input.get(field) {
+        Some(Value::String(s)) if !s.trim().is_empty() => vec![s.trim().to_string()],
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The reference-to-video `content` items, in the order images, videos,
+/// audio (the prompt addresses them as "image 1", "video 1", ...). Each uses
+/// Ark's nested media shape `{type, <type>: {url}, role}`.
+fn reference_items(input: &Value) -> Vec<Value> {
+    let mut items = Vec::new();
+    for (field, kind, role) in [
+        ("image_urls", "image_url", "reference_image"),
+        ("video_urls", "video_url", "reference_video"),
+        ("audio_urls", "audio_url", "reference_audio"),
+    ] {
+        for url in urls_in(input, field) {
+            let mut item = serde_json::Map::new();
+            item.insert("type".into(), Value::from(kind));
+            item.insert(kind.into(), json!({ "url": url }));
+            item.insert("role".into(), Value::from(role));
+            items.push(Value::Object(item));
+        }
+    }
+    items
+}
+
+/// The upstream usage from a completed task (`usage.completion_tokens` is
+/// what the platform bills), plus the delivered length as `output_seconds`
+/// when the task reports `duration`. RouterBase settles token-billed
+/// Seedance rows on it; `None` when the task reported neither.
+fn task_usage(body: &Value) -> Option<Value> {
+    let mut usage = body
+        .get("usage")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(duration) = body
+        .get("duration")
+        .and_then(Value::as_f64)
+        .filter(|d| d.is_finite() && *d > 0.0)
+    {
+        usage.insert("output_seconds".into(), json!(duration));
+    }
+    (!usage.is_empty()).then_some(Value::Object(usage))
 }
 
 /// Extract the result video URL from a completed task response.
@@ -448,18 +537,19 @@ async fn poll_async_result(
     }
 }
 
-async fn post_media_callback(
-    http_client: &TensorzeroHttpClient,
-    callback_url: &str,
+/// The success body POSTed to RouterBase's media callback. `usage` rides at
+/// the top level and under `data` when the task reported one.
+fn media_callback_body(
     task_id: &str,
     urls: &[String],
-) -> Result<(), Error> {
+    usage: Option<&Value>,
+) -> Result<Value, Error> {
     let result_json = serde_json::to_string(&json!({ "resultUrls": urls })).map_err(|e| {
         Error::new(ErrorDetails::Serialization {
             message: format!("Failed to serialize callback payload: {e}"),
         })
     })?;
-    let body = json!({
+    let mut body = json!({
         "taskId": task_id,
         "task_id": task_id,
         "state": "success",
@@ -472,6 +562,21 @@ async fn post_media_callback(
             "resultUrls": urls,
         }
     });
+    if let Some(usage) = usage {
+        body["usage"] = usage.clone();
+        body["data"]["usage"] = usage.clone();
+    }
+    Ok(body)
+}
+
+async fn post_media_callback(
+    http_client: &TensorzeroHttpClient,
+    callback_url: &str,
+    task_id: &str,
+    urls: &[String],
+    usage: Option<&Value>,
+) -> Result<(), Error> {
+    let body = media_callback_body(task_id, urls, usage)?;
     let response = http_client
         .post(callback_url)
         .json(&body)
@@ -813,6 +918,170 @@ mod tests {
                 assert_eq!(body["duration"], json!(4), "duration stays integer");
             }
         }
+    }
+
+    #[test]
+    fn build_body_r2v_maps_every_reference_kind_to_its_role() {
+        let input = json!({
+            "prompt": "the man from image 1 walks like video 1",
+            "image_urls": ["https://x/a.png", "https://x/b.png"],
+            "video_urls": ["https://x/v.mp4"],
+            "audio_urls": "https://x/s.mp3",
+            "resolution": "720p",
+            "ratio": "16:9",
+            "duration": 4
+        });
+        let body = build_body(
+            &AmuxRequestShape::Seedance2ReferenceToVideo,
+            "bytedance/seedance-2.0",
+            &input,
+        )
+        .expect("r2v body builds");
+        assert_eq!(
+            body["content"],
+            json!([
+                { "type": "text", "text": "the man from image 1 walks like video 1" },
+                { "type": "image_url", "image_url": { "url": "https://x/a.png" }, "role": "reference_image" },
+                { "type": "image_url", "image_url": { "url": "https://x/b.png" }, "role": "reference_image" },
+                { "type": "video_url", "video_url": { "url": "https://x/v.mp4" }, "role": "reference_video" },
+                { "type": "audio_url", "audio_url": { "url": "https://x/s.mp3" }, "role": "reference_audio" }
+            ]),
+            "images, videos and audio ride as nested reference items, in that order, never as a first frame"
+        );
+        assert_eq!(body["ratio"], json!("16:9"), "r2v keeps an explicit ratio");
+        assert_eq!(body["duration"], json!(4), "duration stays an integer");
+    }
+
+    #[test]
+    fn build_body_r2v_accepts_images_alone_and_skips_blank_urls() {
+        let body = build_body(
+            &AmuxRequestShape::Seedance2ReferenceToVideo,
+            "bytedance/seedance-2.5",
+            &json!({ "prompt": "p", "image_urls": ["https://x/a.png", " "], "video_urls": [] }),
+        )
+        .expect("an image-only reference request builds");
+        assert_eq!(
+            body["content"].as_array().map(Vec::len),
+            Some(2),
+            "the prompt plus the one non-blank image; blank and empty inputs add nothing"
+        );
+        assert_eq!(body["content"][1]["role"], json!("reference_image"));
+    }
+
+    #[test]
+    fn build_body_r2v_without_references_is_rejected() {
+        assert!(
+            build_body(
+                &AmuxRequestShape::Seedance2ReferenceToVideo,
+                "bytedance/seedance-2.0",
+                &json!({ "prompt": "p", "image_urls": [] }),
+            )
+            .is_err(),
+            "reference-to-video without any reference must be a clean error"
+        );
+    }
+
+    #[test]
+    fn r2v_request_shape_deserializes_from_config_name() {
+        let shape: AmuxRequestShape = serde_json::from_value(json!("seedance2_reference_to_video"))
+            .expect("the TOML name parses");
+        assert!(
+            matches!(shape, AmuxRequestShape::Seedance2ReferenceToVideo),
+            "`seedance2_reference_to_video` selects the reference shape"
+        );
+    }
+
+    #[test]
+    fn task_usage_carries_tokens_and_output_seconds() {
+        let body = json!({
+            "status": "succeeded",
+            "duration": 4,
+            "usage": { "completion_tokens": 302400, "total_tokens": 302400 },
+            "content": { "video_url": "https://cdn/x.mp4" }
+        });
+        assert_eq!(
+            task_usage(&body),
+            Some(json!({ "completion_tokens": 302400, "total_tokens": 302400, "output_seconds": 4.0 })),
+            "billed tokens pass through and the delivered length is added as output_seconds"
+        );
+        assert_eq!(
+            task_usage(&json!({ "status": "succeeded" })),
+            None,
+            "no usage and no duration: nothing to report"
+        );
+    }
+
+    #[test]
+    fn callback_body_includes_usage_only_when_known() {
+        let urls = vec!["https://cdn/x.mp4".to_string()];
+        let usage = json!({ "completion_tokens": 10 });
+        let with = media_callback_body("t1", &urls, Some(&usage)).expect("body builds");
+        assert_eq!(with["usage"], usage, "usage at the top level");
+        assert_eq!(with["data"]["usage"], usage, "and under data");
+        let without = media_callback_body("t1", &urls, None).expect("body builds");
+        assert!(
+            without.get("usage").is_none() && without["data"].get("usage").is_none(),
+            "no usage key when the task reported none"
+        );
+        assert_eq!(without["state"], json!("success"));
+    }
+
+    #[test]
+    fn build_body_i2v_appends_last_frame_when_given() {
+        let body = build_body(
+            &AmuxRequestShape::Seedance2ImageToVideo,
+            "bytedance/seedance-2.5",
+            &json!({
+                "prompt": "turn",
+                "image_urls": ["https://x/first.png"],
+                "last_frame_url": "https://x/last.png"
+            }),
+        )
+        .expect("first-last-frame body builds");
+        assert_eq!(
+            body["content"],
+            json!([
+                { "type": "text", "text": "turn" },
+                { "type": "image_url", "image_url": { "url": "https://x/first.png" }, "role": "first_frame" },
+                { "type": "image_url", "image_url": { "url": "https://x/last.png" }, "role": "last_frame" }
+            ]),
+            "the last frame follows the first frame as a `last_frame` item"
+        );
+        let first_only = build_body(
+            &AmuxRequestShape::Seedance2ImageToVideo,
+            "bytedance/seedance-2.0",
+            &json!({ "prompt": "turn", "image_urls": ["https://x/first.png"], "last_frame_url": " " }),
+        )
+        .expect("i2v body builds");
+        assert_eq!(
+            body_len(&first_only),
+            2,
+            "a blank last_frame_url leaves the request first-frame only, as before"
+        );
+    }
+
+    fn body_len(body: &Value) -> usize {
+        body["content"].as_array().map_or(0, Vec::len)
+    }
+
+    #[test]
+    fn build_body_t2v_ignores_media_fields() {
+        let body = build_body(
+            &AmuxRequestShape::Seedance2TextToVideo,
+            "bytedance/seedance-2.0",
+            &json!({
+                "prompt": "p",
+                "image_urls": ["https://x/a.png"],
+                "video_urls": ["https://x/v.mp4"],
+                "last_frame_url": "https://x/l.png"
+            }),
+        )
+        .expect("t2v body builds");
+        assert_eq!(
+            body["content"],
+            json!([{ "type": "text", "text": "p" }]),
+            "text-to-video stays text-only whatever else the input carries"
+        );
     }
 
     #[test]
