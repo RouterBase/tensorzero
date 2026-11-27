@@ -213,8 +213,10 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 ///   outright, so it is otherwise left out (Ark's default: one image).
 /// - `watermark` defaults to `false`; Ark's own default stamps a visible
 ///   "AI generated" label. A caller can still ask for it.
-/// - `background` / `output_format` (5.5), `optimize_prompt_mode` (4.0) and
-///   `safety_identifier` (RouterBase's hashed caller id) pass through.
+/// - `background` / `output_format` (5.5, 5.0 pro / flash) and
+///   `optimize_prompt_mode` (4.0) pass through; `safety_identifier`
+///   (RouterBase's hashed caller id) only to the models Ark documents it for
+///   ([`takes_safety_identifier`]).
 /// - Layer decomposition (edit with `layer_decomposition: true`, Seedream
 ///   5.5): exactly one image, sent as a string; `max_layers` and
 ///   `text_recognition` become `layer_decomposition_options`; no
@@ -241,10 +243,15 @@ fn build_body(shape: &ArkRequestShape, model: &str, input: &Value) -> Result<Val
     if let Some(prompt) = prompt {
         body.insert("prompt".into(), Value::from(prompt));
     }
-    for key in ["size", "output_format", "safety_identifier"] {
+    for key in ["size", "output_format"] {
         if let Some(value) = input.get(key).and_then(Value::as_str) {
             body.insert(key.into(), Value::from(value));
         }
+    }
+    if takes_safety_identifier(model)
+        && let Some(id) = input.get("safety_identifier").and_then(Value::as_str)
+    {
+        body.insert("safety_identifier".into(), Value::from(id));
     }
     // Not allowed in layer mode (Ark rejects it there).
     if !layers && let Some(background) = input.get("background").and_then(Value::as_str) {
@@ -323,6 +330,17 @@ fn build_body(shape: &ArkRequestShape, model: &str, input: &Value) -> Result<Val
         );
     }
     Ok(Value::Object(body))
+}
+
+/// Ark documents `safety_identifier` for "Seedream 5.5, Seedream 5.0 pro,
+/// Seedream 5.0 flash" only (image generation API reference, "Supported
+/// models"). Matched on the model id, which carries the family on both hosts
+/// (`dola-seedream-5-5-261028`, `doubao-seedream-5-0-pro-260628`,
+/// `seedream-4-5-251128`, ...).
+fn takes_safety_identifier(model: &str) -> bool {
+    ["seedream-5-5", "seedream-5-0-pro", "seedream-5-0-flash"]
+        .iter()
+        .any(|family| model.contains(family))
 }
 
 /// Per successful image: its URL and the metadata RouterBase keeps with it
@@ -511,7 +529,12 @@ mod tests {
             "prompt": "x", "watermark": true, "background": "transparent", "output_format": "png",
             "optimize_prompt_mode": "fast", "safety_identifier": "u-abc",
         });
-        let body = build_body(&ArkRequestShape::SeedreamTextToImage, "m", &input).unwrap();
+        let body = build_body(
+            &ArkRequestShape::SeedreamTextToImage,
+            "dola-seedream-5-5-261028",
+            &input,
+        )
+        .unwrap();
         assert_eq!(
             body["watermark"],
             json!(true),
@@ -537,6 +560,39 @@ mod tests {
             json!("u-abc"),
             "the hashed caller id is forwarded"
         );
+    }
+
+    #[test]
+    fn safety_identifier_reaches_only_the_models_that_document_it() {
+        let input = json!({"prompt": "x", "safety_identifier": "u-abc"});
+        for model in [
+            "dola-seedream-5-5-261028",
+            "doubao-seedream-5-5-261028",
+            "dola-seedream-5-0-pro-260628",
+            "doubao-seedream-5-0-flash-260915",
+        ] {
+            let body = build_body(&ArkRequestShape::SeedreamTextToImage, model, &input).unwrap();
+            assert_eq!(body["safety_identifier"], json!("u-abc"), "{model}");
+        }
+        for model in [
+            "seedream-4-0-20260415",
+            "doubao-seedream-4-0-20260415",
+            "seedream-4-5-251128",
+            "seedream-5-0-260128",
+        ] {
+            let body = build_body(
+                &ArkRequestShape::SeedreamEdit,
+                model,
+                &json!({
+                    "prompt": "x", "safety_identifier": "u-abc", "image_urls": ["https://a/1.png"]
+                }),
+            )
+            .unwrap();
+            assert!(
+                body.get("safety_identifier").is_none(),
+                "{model}: not a documented field there"
+            );
+        }
     }
 
     #[test]

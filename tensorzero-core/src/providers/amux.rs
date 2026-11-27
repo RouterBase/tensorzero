@@ -195,23 +195,31 @@ fn get_api_key(dynamic_api_keys: &InferenceCredentials) -> Result<SecretString, 
 /// `duration` (an INTEGER count of seconds, not the old string `seconds`),
 /// `ratio`, `generate_audio`, `watermark` and (2.5 only) `output_format` are
 /// top-level. `seed` is not part of this endpoint and is dropped.
+///
+/// The prompt is required for text-to-video only: with an image or reference
+/// media "Text (optional)" is all Ark asks for, so an empty prompt sends no
+/// text item. Reference-to-video also forwards `omni_reference_task_type`
+/// (Seedance 2.5: `auto` / `reference` / `edit` / `extend`).
 fn build_body(shape: &AmuxRequestShape, model: &str, input: &Value) -> Result<Value, Error> {
     let prompt = input
         .get("prompt")
         .and_then(Value::as_str)
-        .filter(|prompt| !prompt.is_empty())
-        .ok_or_else(|| {
-            Error::new(ErrorDetails::InvalidRequest {
-                message: "Amux-backed video variants require a prompt".to_string(),
-            })
-        })?;
+        .filter(|prompt| !prompt.trim().is_empty());
+    if prompt.is_none() && matches!(shape, AmuxRequestShape::Seedance2TextToVideo) {
+        return Err(Error::new(ErrorDetails::InvalidRequest {
+            message: "Amux text-to-video requires a prompt".to_string(),
+        }));
+    }
 
     let mut body = serde_json::Map::new();
     body.insert("model".into(), Value::from(model));
 
-    // `content`: the prompt as a text item, plus the first-frame image for
-    // image-to-video.
-    let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
+    // `content`: the prompt as a text item (when there is one), plus the
+    // first-frame image for image-to-video or the references.
+    let mut content: Vec<Value> = prompt
+        .map(|prompt| json!({ "type": "text", "text": prompt }))
+        .into_iter()
+        .collect();
     if matches!(shape, AmuxRequestShape::Seedance2ImageToVideo) {
         let first_frame = input
             .get("image")
@@ -256,6 +264,13 @@ fn build_body(shape: &AmuxRequestShape, model: &str, input: &Value) -> Result<Va
             }));
         }
         content.extend(references);
+        if let Some(task_type) = input
+            .get("omni_reference_task_type")
+            .and_then(Value::as_str)
+            .filter(|t| !t.trim().is_empty())
+        {
+            body.insert("omni_reference_task_type".into(), Value::from(task_type));
+        }
     }
     body.insert("content".into(), Value::Array(content));
 
@@ -1095,6 +1110,77 @@ mod tests {
             )
             .is_err(),
             "image-to-video without a first-frame URL must be a clean error"
+        );
+    }
+
+    #[test]
+    fn build_body_prompt_is_optional_with_media_only() {
+        for prompt in [json!(""), json!("  "), Value::Null] {
+            let i2v = build_body(
+                &AmuxRequestShape::Seedance2ImageToVideo,
+                "bytedance/seedance-2.5",
+                &json!({ "prompt": prompt, "image_urls": ["https://x/first.png"] }),
+            )
+            .expect("image-to-video without a prompt builds");
+            assert_eq!(
+                i2v["content"],
+                json!([{
+                    "type": "image_url", "image_url": { "url": "https://x/first.png" },
+                    "role": "first_frame"
+                }]),
+                "no text item for {prompt}"
+            );
+            let r2v = build_body(
+                &AmuxRequestShape::Seedance2ReferenceToVideo,
+                "bytedance/seedance-2.5",
+                &json!({ "prompt": prompt, "audio_urls": ["https://x/s.mp3"] }),
+            )
+            .expect("reference-to-video without a prompt builds");
+            assert_eq!(r2v["content"][0]["role"], json!("reference_audio"));
+            assert!(
+                build_body(
+                    &AmuxRequestShape::Seedance2TextToVideo,
+                    "bytedance/seedance-2.5",
+                    &json!({ "prompt": prompt }),
+                )
+                .is_err(),
+                "text-to-video still needs its prompt ({prompt})"
+            );
+        }
+    }
+
+    #[test]
+    fn build_body_r2v_forwards_the_omni_reference_task_type() {
+        let input = json!({
+            "prompt": "Replace the car in video 1 with the car in image 1",
+            "image_urls": ["https://x/car.png"],
+            "video_urls": ["https://x/v.mp4"],
+            "omni_reference_task_type": "edit",
+            "ratio": "adaptive",
+            "duration": -1
+        });
+        let body = build_body(
+            &AmuxRequestShape::Seedance2ReferenceToVideo,
+            "bytedance/seedance-2.5",
+            &input,
+        )
+        .unwrap();
+        assert_eq!(body["omni_reference_task_type"], json!("edit"));
+        assert_eq!(
+            body["duration"],
+            json!(-1),
+            "-1 lets the model pick the length"
+        );
+        assert_eq!(body["ratio"], json!("adaptive"));
+        let t2v = build_body(
+            &AmuxRequestShape::Seedance2TextToVideo,
+            "bytedance/seedance-2.5",
+            &json!({ "prompt": "p", "omni_reference_task_type": "edit" }),
+        )
+        .unwrap();
+        assert!(
+            t2v.get("omni_reference_task_type").is_none(),
+            "only reference-to-video has a task type"
         );
     }
 }
