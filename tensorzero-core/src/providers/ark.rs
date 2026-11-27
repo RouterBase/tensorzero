@@ -56,7 +56,9 @@ pub struct ArkMediaProxyConfig {
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize, PartialEq)]
 #[cfg_attr(feature = "ts-bindings", ts(export))]
 pub enum ArkRequestShape {
-    /// Seedream text-to-image: `prompt`, optional `size` and `watermark`.
+    /// Seedream text-to-image: `prompt`, optional `size` and `watermark`, and
+    /// optional reference images (`image_urls`, sent as Ark's `image` array
+    /// like an edit; the same Ark model takes both). No layer mode.
     #[serde(rename = "seedream_text_to_image")]
     SeedreamTextToImage,
     /// Seedream edit: as above plus the reference images (`image_urls`, sent
@@ -270,7 +272,14 @@ fn build_body(shape: &ArkRequestShape, model: &str, input: &Value) -> Result<Val
         })
         .unwrap_or_default();
     match shape {
-        ArkRequestShape::SeedreamTextToImage => {}
+        // Ark serves both modes from one model: optional reference images
+        // turn a text-to-image call into image-to-image / multi-image fusion.
+        // Without them the body is unchanged.
+        ArkRequestShape::SeedreamTextToImage => {
+            if !images.is_empty() {
+                body.insert("image".into(), Value::Array(images));
+            }
+        }
         ArkRequestShape::SeedreamEdit if !layers => {
             if images.is_empty() {
                 return Err(Error::new(ErrorDetails::InvalidRequest {
@@ -581,6 +590,69 @@ mod tests {
             )
             .is_err(),
             "a blank prompt is rejected"
+        );
+    }
+
+    #[test]
+    fn text_to_image_takes_optional_reference_images() {
+        let plain = json!({"prompt": "a red cube", "size": "2048x2048"});
+        let without = build_body(&ArkRequestShape::SeedreamTextToImage, "m", &plain).unwrap();
+        assert_eq!(
+            without,
+            json!({
+                "model": "m",
+                "prompt": "a red cube",
+                "size": "2048x2048",
+                "watermark": false,
+                "response_format": "url",
+            }),
+            "without images the text-to-image body is unchanged (no `image` key)"
+        );
+        for empty in [json!([]), json!(["", "  "])] {
+            let body = build_body(
+                &ArkRequestShape::SeedreamTextToImage,
+                "m",
+                &json!({"prompt": "a red cube", "size": "2048x2048", "image_urls": empty}),
+            )
+            .unwrap();
+            assert_eq!(
+                body, without,
+                "an empty or all-blank `image_urls` sends no `image`: {empty}"
+            );
+        }
+        let with = build_body(
+            &ArkRequestShape::SeedreamTextToImage,
+            "m",
+            &json!({"prompt": "fuse them", "image_urls": ["https://a/1.png", "", "https://a/2.png"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            with["image"],
+            json!(["https://a/1.png", "https://a/2.png"]),
+            "reference images go out as Ark's `image` array, blanks dropped, like an edit"
+        );
+        let single = build_body(
+            &ArkRequestShape::SeedreamTextToImage,
+            "m",
+            &json!({"prompt": "x", "image_urls": ["https://a/1.png"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            single["image"],
+            json!(["https://a/1.png"]),
+            "one reference image is still an array"
+        );
+        let no_layers = build_body(
+            &ArkRequestShape::SeedreamTextToImage,
+            "m",
+            &json!({"prompt": "x", "image_urls": ["https://a/1.png"],
+                    "layer_decomposition": true, "max_layers": 12}),
+        )
+        .unwrap();
+        assert!(
+            no_layers.get("layer_decomposition").is_none()
+                && no_layers.get("layer_decomposition_options").is_none(),
+            "text-to-image never forwards layer decomposition"
         );
     }
 
